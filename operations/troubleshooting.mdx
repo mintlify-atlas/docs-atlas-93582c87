@@ -1,0 +1,768 @@
+---
+title: Troubleshooting
+description: Common issues, solutions, and debugging techniques for Qdrant
+---
+
+## Overview
+
+This guide covers common issues you may encounter when running Qdrant and provides solutions to resolve them quickly.
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Service won't start">
+    ### Symptoms
+    - Qdrant process exits immediately after starting
+    - Unable to connect to HTTP/gRPC ports
+    
+    ### Causes & Solutions
+    
+    **Port already in use:**
+    ```bash
+    # Check if port is in use
+    lsof -i :6333
+    netstat -tuln | grep 6333
+    
+    # Solution: Change port in config
+    service:
+      http_port: 6334
+    ```
+    
+    **Invalid configuration:**
+    ```bash
+    # Validate config syntax
+    ./qdrant --config-path config/config.yaml --validate
+    
+    # Check logs for specific errors
+    tail -f /var/log/qdrant/qdrant.log
+    ```
+    
+    **Permission issues:**
+    ```bash
+    # Fix storage directory permissions
+    sudo chown -R qdrant:qdrant /var/lib/qdrant
+    sudo chmod -R 755 /var/lib/qdrant
+    ```
+    
+    **Missing dependencies:**
+    ```bash
+    # Check shared libraries (Linux)
+    ldd ./qdrant
+    
+    # Install missing dependencies
+    sudo apt install libssl3 libstdc++6
+    ```
+  </Accordion>
+
+  <Accordion title="High memory usage">
+    ### Symptoms
+    - Qdrant consuming excessive RAM
+    - OOM (Out of Memory) kills
+    - Swapping to disk
+    
+    ### Diagnosis
+    
+    ```bash
+    # Check memory metrics
+    curl http://localhost:6333/metrics | grep memory
+    
+    # Monitor process memory
+    ps aux | grep qdrant
+    top -p $(pgrep qdrant)
+    ```
+    
+    ### Solutions
+    
+    **1. Enable on-disk storage:**
+    ```yaml
+    storage:
+      on_disk_payload: true
+      
+      collection:
+        vectors:
+          on_disk: true
+      
+      hnsw_index:
+        on_disk: true
+    ```
+    
+    **2. Enable quantization:**
+    ```bash
+    curl -X PATCH http://localhost:6333/collections/{collection_name} \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "quantization_config": {
+          "scalar": {
+            "type": "int8",
+            "always_ram": false
+          }
+        }
+      }'
+    ```
+    
+    **3. Use mmap for large segments:**
+    ```bash
+    curl -X PATCH http://localhost:6333/collections/{collection_name} \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "optimizers_config": {
+          "memmap_threshold_kb": 50000
+        }
+      }'
+    ```
+    
+    **4. Reduce HNSW M parameter:**
+    ```yaml
+    hnsw_index:
+      m: 16  # Lower from 32 or 64
+    ```
+  </Accordion>
+
+  <Accordion title="Slow queries">
+    ### Symptoms
+    - Search requests taking >100ms
+    - High p95/p99 latencies
+    - Timeouts under load
+    
+    ### Diagnosis
+    
+    ```bash
+    # Check latency metrics
+    curl http://localhost:6333/metrics | grep duration
+    
+    # Monitor active operations
+    curl http://localhost:6333/collections/{collection_name}
+    ```
+    
+    ### Solutions
+    
+    **1. Optimize HNSW search parameters:**
+    ```bash
+    # Reduce hnsw_ef for faster queries
+    curl -X POST http://localhost:6333/collections/{collection_name}/points/search \
+      -d '{
+        "vector": [...],
+        "limit": 10,
+        "params": {"hnsw_ef": 64}  # Lower from 128
+      }'
+    ```
+    
+    **2. Check payload indexes:**
+    ```bash
+    # Ensure filtered fields are indexed
+    curl -X PUT http://localhost:6333/collections/{collection_name}/index \
+      -d '{
+        "field_name": "category",
+        "field_schema": "keyword"
+      }'
+    ```
+    
+    **3. Enable indexed_only for filters:**
+    ```bash
+    curl -X POST .../points/search \
+      -d '{
+        "vector": [...],
+        "filter": {...},
+        "params": {"indexed_only": true}
+      }'
+    ```
+    
+    **4. Move to SSD storage:**
+    - On-disk indexes perform poorly on HDDs
+    - Use NVMe SSDs for best performance
+    
+    **5. Disable on-disk storage for hot collections:**
+    ```bash
+    curl -X PATCH http://localhost:6333/collections/{collection_name} \
+      -d '{"vectors": {"on_disk": false}}'
+    ```
+  </Accordion>
+
+  <Accordion title="Indexing takes too long">
+    ### Symptoms
+    - Optimization jobs running for hours
+    - High CPU usage
+    - Collection stuck in "yellow" status
+    
+    ### Diagnosis
+    
+    ```bash
+    # Check optimization status
+    curl http://localhost:6333/collections/{collection_name}
+    
+    # Monitor optimization metrics
+    curl http://localhost:6333/metrics | grep optimization
+    ```
+    
+    ### Solutions
+    
+    **1. Increase indexing threads (carefully):**
+    ```yaml
+    storage:
+      hnsw_index:
+        max_indexing_threads: 12  # 8-16 recommended
+    ```
+    
+    **2. Reduce ef_construct for faster indexing:**
+    ```bash
+    curl -X PATCH http://localhost:6333/collections/{collection_name} \
+      -d '{
+        "hnsw_config": {
+          "ef_construct": 100  # Lower from 200+
+        }
+      }'
+    ```
+    
+    **3. Increase indexing threshold:**
+    ```yaml
+    optimizers:
+      indexing_threshold_kb: 20000  # Delay indexing for larger segments
+    ```
+    
+    **4. Temporarily disable optimization:**
+    ```yaml
+    optimizers:
+      max_optimization_threads: 0  # Disable
+    ```
+  </Accordion>
+
+  <Accordion title="Disk space running out">
+    ### Symptoms
+    - "No space left on device" errors
+    - Failed snapshot creation
+    - Write operations failing
+    
+    ### Diagnosis
+    
+    ```bash
+    # Check disk usage
+    df -h /var/lib/qdrant
+    
+    # Find large files
+    du -sh /var/lib/qdrant/*
+    du -sh /var/lib/qdrant/storage/collections/*
+    ```
+    
+    ### Solutions
+    
+    **1. Clean up old snapshots:**
+    ```bash
+    # List snapshots
+    curl http://localhost:6333/snapshots
+    
+    # Delete old snapshots
+    curl -X DELETE http://localhost:6333/snapshots/{snapshot_name}
+    
+    # Or manually
+    rm -f /var/lib/qdrant/snapshots/*.snapshot
+    ```
+    
+    **2. Optimize collections:**
+    ```bash
+    # Trigger optimization to clean deleted points
+    curl -X POST http://localhost:6333/collections/{collection_name}/points/optimize
+    ```
+    
+    **3. Enable compression:**
+    ```bash
+    curl -X PATCH http://localhost:6333/collections/{collection_name} \
+      -d '{
+        "quantization_config": {
+          "scalar": {"type": "int8"}
+        }
+      }'
+    ```
+    
+    **4. Move snapshots to external storage:**
+    ```yaml
+    storage:
+      snapshots_config:
+        snapshots_storage: s3
+        s3_config:
+          bucket: my-backups
+          region: us-east-1
+    ```
+  </Accordion>
+
+  <Accordion title="Cluster node won't join">
+    ### Symptoms
+    - Node can't connect to cluster
+    - Stuck in "initializing" state
+    - Raft errors in logs
+    
+    ### Diagnosis
+    
+    ```bash
+    # Check cluster status
+    curl http://localhost:6333/cluster
+    
+    # Check connectivity
+    nc -zv <leader-node> 6335
+    
+    # Review logs
+    tail -f /var/log/qdrant/qdrant.log | grep -i "raft\|consensus\|cluster"
+    ```
+    
+    ### Solutions
+    
+    **1. Verify network connectivity:**
+    ```bash
+    # Test P2P port
+    telnet <leader-node> 6335
+    
+    # Check firewall rules
+    sudo iptables -L -n | grep 6335
+    sudo ufw status
+    ```
+    
+    **2. Check cluster configuration:**
+    ```yaml
+    cluster:
+      enabled: true
+      p2p:
+        port: 6335
+    ```
+    
+    **3. Clear stale Raft state:**
+    ```bash
+    # Stop Qdrant
+    systemctl stop qdrant
+    
+    # Remove Raft state
+    rm -rf /var/lib/qdrant/storage/.raft
+    
+    # Rejoin cluster
+    ./qdrant --uri http://<leader>:6335
+    ```
+    
+    **4. Bootstrap new cluster:**
+    ```bash
+    # If cluster is unrecoverable, bootstrap from one node
+    ./qdrant --bootstrap
+    ```
+  </Accordion>
+
+  <Accordion title="Replica out of sync">
+    ### Symptoms
+    - Replicas in "Dead" or "Partial" state
+    - Search results inconsistent across nodes
+    - `collection_dead_replicas` metric > 0
+    
+    ### Diagnosis
+    
+    ```bash
+    # Check replica states
+    curl http://localhost:6333/collections/{collection_name}/cluster
+    
+    # Check metrics
+    curl http://localhost:6333/metrics | grep replica
+    ```
+    
+    ### Solutions
+    
+    **1. Wait for automatic recovery:**
+    Qdrant automatically tries to recover replicas. Monitor `/readyz` endpoint.
+    
+    **2. Manually trigger recovery:**
+    ```bash
+    # Recover from snapshot
+    curl -X PUT http://localhost:6333/collections/{collection_name}/snapshots/recover \
+      -d '{"location": "http://<peer-node>:6333/collections/{collection_name}/snapshots/{snapshot}"}'
+    ```
+    
+    **3. Remove and re-add replica:**
+    ```bash
+    # Remove dead replica
+    curl -X POST http://localhost:6333/collections/{collection_name}/cluster \
+      -d '{
+        "remove_replica": {
+          "shard_id": 0,
+          "peer_id": 2
+        }
+      }'
+    
+    # Add new replica
+    curl -X POST http://localhost:6333/collections/{collection_name}/cluster \
+      -d '{
+        "replicate_shard": {
+          "shard_id": 0,
+          "to_peer_id": 3
+        }
+      }'
+    ```
+  </Accordion>
+
+  <Accordion title="File descriptor limit reached">
+    ### Symptoms
+    - "Too many open files" errors
+    - `process_open_fds` approaching `process_max_fds`
+    - Failed connections or file operations
+    
+    ### Diagnosis
+    
+    ```bash
+    # Check current FD usage
+    curl http://localhost:6333/metrics | grep "process.*fds"
+    
+    # Check system limits
+    ulimit -n
+    cat /proc/$(pgrep qdrant)/limits | grep "Max open files"
+    ```
+    
+    ### Solutions
+    
+    **1. Increase system limits:**
+    ```bash
+    # For current session
+    ulimit -n 65536
+    
+    # Permanently (add to /etc/security/limits.conf)
+    qdrant soft nofile 65536
+    qdrant hard nofile 65536
+    ```
+    
+    **2. Systemd service limits:**
+    ```ini
+    # /etc/systemd/system/qdrant.service
+    [Service]
+    LimitNOFILE=65536
+    ```
+    
+    ```bash
+    sudo systemctl daemon-reload
+    sudo systemctl restart qdrant
+    ```
+    
+    **3. Reduce concurrent operations:**
+    ```yaml
+    storage:
+      performance:
+        max_concurrent_segment_loads: 4  # Lower from 8
+    ```
+  </Accordion>
+
+  <Accordion title="Snapshot creation fails">
+    ### Symptoms
+    - Snapshot API returns errors
+    - Partial snapshot files
+    - Snapshot downloads timeout
+    
+    ### Diagnosis
+    
+    ```bash
+    # Check disk space
+    df -h $(grep snapshots_path config/config.yaml | awk '{print $2}')
+    
+    # Check temp space
+    df -h $(grep temp_path config/config.yaml | awk '{print $2}')
+    
+    # Review logs
+    tail -f /var/log/qdrant/qdrant.log | grep snapshot
+    ```
+    
+    ### Solutions
+    
+    **1. Ensure sufficient disk space:**
+    Snapshots need ~2x collection size (temp + final location)
+    
+    **2. Use fast temp storage:**
+    ```yaml
+    storage:
+      temp_path: /mnt/nvme/qdrant-temp
+    ```
+    
+    **3. Snapshot individual shards:**
+    ```bash
+    # Smaller, parallelizable snapshots
+    for shard in 0 1 2 3; do
+      curl -X POST http://localhost:6333/collections/{collection}/shards/$shard/snapshots
+    done
+    ```
+    
+    **4. Use S3 for large snapshots:**
+    ```yaml
+    storage:
+      snapshots_config:
+        snapshots_storage: s3
+    ```
+  </Accordion>
+
+  <Accordion title="gRPC connection issues">
+    ### Symptoms
+    - gRPC clients can't connect
+    - "UNAVAILABLE" or "DEADLINE_EXCEEDED" errors
+    - REST works but gRPC doesn't
+    
+    ### Diagnosis
+    
+    ```bash
+    # Check if gRPC port is open
+    nc -zv localhost 6334
+    
+    # Test with grpcurl
+    grpcurl -plaintext localhost:6334 list
+    ```
+    
+    ### Solutions
+    
+    **1. Enable gRPC in config:**
+    ```yaml
+    service:
+      grpc_port: 6334  # Must be set
+    ```
+    
+    **2. Check TLS configuration:**
+    ```yaml
+    service:
+      enable_tls: true  # Must match client settings
+    
+    tls:
+      cert: /path/to/cert.pem
+      key: /path/to/key.pem
+    ```
+    
+    **3. Increase timeouts:**
+    ```python
+    from qdrant_client import QdrantClient
+    
+    client = QdrantClient(
+        url="localhost",
+        grpc_port=6334,
+        timeout=60  # Increase from default
+    )
+    ```
+    
+    **4. Check firewall:**
+    ```bash
+    sudo ufw allow 6334/tcp
+    sudo iptables -A INPUT -p tcp --dport 6334 -j ACCEPT
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Debugging Techniques
+
+### Enable Debug Logging
+
+```yaml
+# config/config.yaml
+log_level: DEBUG
+```
+
+Or at runtime:
+```bash
+export QDRANT__LOG_LEVEL=DEBUG
+./qdrant
+```
+
+### Collect Stacktraces
+
+For performance debugging:
+
+```bash
+# Start with stacktrace collection
+./qdrant --stacktrace
+
+# Get current stacktrace
+curl http://localhost:6333/stacktrace > stacktrace.txt
+```
+
+### Analyze Metrics
+
+Export metrics for analysis:
+
+```bash
+# Prometheus format
+curl http://localhost:6333/metrics > metrics.txt
+
+# Telemetry (detailed)
+curl "http://localhost:6333/telemetry?details_level=2" > telemetry.json
+```
+
+### Check System Resources
+
+```bash
+# CPU usage
+top -p $(pgrep qdrant)
+
+# Memory breakdown
+pmap -x $(pgrep qdrant)
+
+# I/O stats
+iotop -p $(pgrep qdrant)
+
+# Network connections
+lsof -p $(pgrep qdrant) -a -i
+```
+
+### Review Configuration
+
+```bash
+# Dump effective configuration
+curl http://localhost:6333/collections/{collection_name} | jq '.result.config'
+
+# Validate config file
+./qdrant --config-path config/config.yaml --validate
+```
+
+## Performance Profiling
+
+### Load Testing
+
+```bash
+# Install Apache Bench
+sudo apt install apache2-utils
+
+# Test concurrent requests
+ab -n 1000 -c 10 -p search.json \
+   -T application/json \
+   http://localhost:6333/collections/my_collection/points/search
+```
+
+### Query Profiling
+
+Add `time` to queries:
+
+```bash
+curl -w "\nTime: %{time_total}s\n" \
+     -X POST http://localhost:6333/collections/my_collection/points/search \
+     -d '{...}'
+```
+
+## Health Checks
+
+### Service Health
+
+```bash
+# Liveness (is service running?)
+curl http://localhost:6333/
+
+# Readiness (is service ready for traffic?)
+curl http://localhost:6333/readyz
+```
+
+### Collection Health
+
+```bash
+# Collection status
+curl http://localhost:6333/collections/{collection_name}
+
+# Cluster status (distributed mode)
+curl http://localhost:6333/collections/{collection_name}/cluster
+```
+
+### System Health
+
+```bash
+# Check all metrics
+curl http://localhost:6333/metrics | grep -E "(replica|error|latency)"
+
+# Memory pressure
+free -h
+cat /proc/meminfo
+
+# Disk I/O wait
+iostat -x 1 5
+```
+
+## Log Analysis
+
+### Common Log Messages
+
+**Collection optimization:**
+```
+INFO Optimizing collection my_collection, segment 0
+INFO Optimization completed for my_collection, segment 0
+```
+
+**Cluster operations:**
+```
+INFO Raft log compacted, kept entries: 1234
+WARN Peer 2 is not responding, marking as unavailable
+INFO Shard transfer completed: collection=my_collection, shard=0, from=1, to=2
+```
+
+**Errors to investigate:**
+```
+ERROR Failed to flush WAL: No space left on device
+ERROR Consensus operation timeout
+ERROR Failed to build HNSW index: Out of memory
+```
+
+### Log Aggregation
+
+Configure structured logging for better analysis:
+
+```yaml
+logger:
+  format: json  # Easier to parse than text
+```
+
+## Getting Help
+
+### Collecting Debug Information
+
+When reporting issues, include:
+
+```bash
+#!/bin/bash
+# debug_info.sh
+
+echo "=== Qdrant Version ==="
+curl -s http://localhost:6333/ | jq
+
+echo "\n=== Cluster Status ==="
+curl -s http://localhost:6333/cluster | jq
+
+echo "\n=== Collections ==="
+curl -s http://localhost:6333/collections | jq
+
+echo "\n=== Metrics Summary ==="
+curl -s http://localhost:6333/metrics | grep -E "(memory|replica|error)"
+
+echo "\n=== System Resources ==="
+free -h
+df -h
+ulimit -a
+
+echo "\n=== Recent Logs ==="
+tail -50 /var/log/qdrant/qdrant.log
+```
+
+### Community Support
+
+- **Discord**: [https://qdrant.to/discord](https://qdrant.to/discord)
+- **GitHub Issues**: [https://github.com/qdrant/qdrant/issues](https://github.com/qdrant/qdrant/issues)
+- **Documentation**: [https://qdrant.tech/documentation](https://qdrant.tech/documentation)
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Monitor Proactively" icon="chart-line">
+    Set up alerts before issues occur. Monitor key metrics continuously.
+  </Card>
+  
+  <Card title="Keep Logs" icon="file-lines">
+    Retain logs for at least 7 days to diagnose intermittent issues.
+  </Card>
+  
+  <Card title="Test Recovery" icon="flask">
+    Regularly test backup/restore and failover procedures.
+  </Card>
+  
+  <Card title="Document Changes" icon="book">
+    Track configuration changes and their impact on performance.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Set up comprehensive monitoring and alerting
+  </Card>
+  
+  <Card title="Performance Tuning" icon="gauge" href="/operations/performance-tuning">
+    Optimize configuration for your workload
+  </Card>
+</CardGroup>

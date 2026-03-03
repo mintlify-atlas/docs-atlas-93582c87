@@ -1,0 +1,158 @@
+---
+title: Upsert Points
+api: PUT /collections/{name}/points
+---
+
+Insert or update points in a collection. If a point with the same ID already exists, it will be overwritten.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection to upsert points into
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="wait" type="boolean" default="true">
+  Whether to wait for the operation to be applied to all replicas. If `false`, the operation will return immediately after being applied to the local shard.
+</ParamField>
+
+<ParamField query="ordering" type="string" default="weak">
+  Write ordering guarantees:
+  - `weak` - No ordering guarantees
+  - `medium` - Writes are applied in order on each replica
+  - `strong` - Writes are applied in the same order across all replicas
+</ParamField>
+
+## Request Body
+
+<ParamField body="points" type="array" required>
+  Array of points to upsert. Each point must contain:
+  
+  <Expandable title="Point Object">
+    <ParamField body="id" type="integer | string" required>
+      Unique identifier for the point. Can be an integer or UUID string.
+    </ParamField>
+    
+    <ParamField body="vector" type="array | object" required>
+      Vector data. Can be:
+      - A dense vector: `[0.1, 0.2, 0.3, ...]`
+      - Named vectors: `{"image": [0.1, 0.2], "text": [0.3, 0.4]}`
+    </ParamField>
+    
+    <ParamField body="payload" type="object">
+      Optional payload - arbitrary JSON data associated with the point
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="batch" type="object">
+  Alternative batch format with separate arrays:
+  
+  <Expandable title="Batch Object">
+    <ParamField body="ids" type="array" required>
+      Array of point IDs
+    </ParamField>
+    
+    <ParamField body="vectors" type="array" required>
+      Array of vectors corresponding to the IDs
+    </ParamField>
+    
+    <ParamField body="payloads" type="array">
+      Optional array of payloads corresponding to the IDs
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  <Expandable title="Update Result">
+    <ResponseField name="operation_id" type="integer">
+      Sequential number of the operation
+    </ResponseField>
+    
+    <ResponseField name="status" type="string">
+      Operation status: `acknowledged`, `completed`, or `clock_rejected`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok` or `error`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Single Vector Mode
+
+```json
+{
+  "points": [
+    {
+      "id": 1,
+      "vector": [0.05, 0.61, 0.76, 0.74],
+      "payload": {"city": "Berlin", "price": 1.99}
+    },
+    {
+      "id": 2,
+      "vector": [0.19, 0.81, 0.75, 0.11],
+      "payload": {"city": "London", "price": 2.49}
+    }
+  ]
+}
+```
+
+### Named Vectors Mode
+
+```json
+{
+  "points": [
+    {
+      "id": 1,
+      "vector": {
+        "image": [0.05, 0.61, 0.76, 0.74],
+        "text": [0.19, 0.81, 0.75, 0.11]
+      },
+      "payload": {"name": "Product A"}
+    }
+  ]
+}
+```
+
+### Batch Format
+
+```json
+{
+  "batch": {
+    "ids": [1, 2, 3],
+    "vectors": [
+      [0.05, 0.61, 0.76, 0.74],
+      [0.19, 0.81, 0.75, 0.11],
+      [0.36, 0.55, 0.47, 0.94]
+    ],
+    "payloads": [
+      {"city": "Berlin"},
+      {"city": "London"},
+      {"city": "Paris"}
+    ]
+  }
+}
+```
+
+### Response Example
+
+```json
+{
+  "result": {
+    "operation_id": 123,
+    "status": "completed"
+  },
+  "status": "ok",
+  "time": 0.042
+}
+```

@@ -1,0 +1,255 @@
+---
+title: Delete Collection Snapshot
+openapi: DELETE /collections/{collection_name}/snapshots/{snapshot_name}
+---
+
+Delete a specific snapshot file for a collection. This permanently removes the snapshot and frees up disk space.
+
+## Use Cases
+
+- Clean up old or unnecessary snapshots
+- Free up disk space
+- Remove snapshots after successful migration
+- Implement snapshot retention policies
+- Delete corrupted or invalid snapshots
+
+## Path Parameters
+
+<ParamField path="collection_name" type="string" required>
+  Name of the collection containing the snapshot.
+</ParamField>
+
+<ParamField path="snapshot_name" type="string" required>
+  Name of the snapshot file to delete.
+  
+  Example: `my-collection-3766212330831337-2024-07-22-08-31-55.snapshot`
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="wait" type="boolean" default="true">
+  If `true`, wait for the deletion to complete before returning. If `false`, the operation runs in the background.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="boolean">
+  `true` if the snapshot was successfully deleted
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok` or `accepted` (if `wait=false`)
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Delete Specific Snapshot
+
+```bash
+DELETE /collections/my_collection/snapshots/my-collection-3766212330831337-2024-07-22-08-31-55.snapshot
+```
+
+Response:
+```json
+{
+  "result": true,
+  "status": "ok",
+  "time": 0.012
+}
+```
+
+### Delete Without Waiting
+
+```bash
+DELETE /collections/my_collection/snapshots/my-collection-3766212330831337-2024-07-22-08-31-55.snapshot?wait=false
+```
+
+Response:
+```json
+{
+  "result": true,
+  "status": "accepted",
+  "time": 0.001
+}
+```
+
+### Using cURL
+
+```bash
+curl -X DELETE \
+  'http://localhost:6333/collections/my_collection/snapshots/my-collection-3766212330831337-2024-07-22-08-31-55.snapshot'
+```
+
+### Using Python Client
+
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient("http://localhost:6333")
+
+client.delete_snapshot(
+    collection_name="my_collection",
+    snapshot_name="my-collection-3766212330831337-2024-07-22-08-31-55.snapshot"
+)
+
+print("Snapshot deleted successfully")
+```
+
+### Using TypeScript Client
+
+```typescript
+import { QdrantClient } from "@qdrant/js-client-rest";
+
+const client = new QdrantClient({ url: "http://localhost:6333" });
+
+await client.deleteSnapshot(
+  "my_collection",
+  "my-collection-3766212330831337-2024-07-22-08-31-55.snapshot"
+);
+
+console.log("Snapshot deleted successfully");
+```
+
+## Batch Deletion Example
+
+### Delete Old Snapshots (Python)
+
+```python
+from datetime import datetime, timedelta
+from qdrant_client import QdrantClient
+
+client = QdrantClient("http://localhost:6333")
+
+# Delete snapshots older than 30 days
+snapshots = client.list_snapshots("my_collection")
+cutoff_date = datetime.now() - timedelta(days=30)
+
+for snapshot in snapshots:
+    snapshot_date = datetime.fromisoformat(snapshot.creation_time.replace('Z', '+00:00'))
+    
+    if snapshot_date < cutoff_date:
+        print(f"Deleting old snapshot: {snapshot.name}")
+        client.delete_snapshot(
+            collection_name="my_collection",
+            snapshot_name=snapshot.name
+        )
+```
+
+### Keep Only Latest N Snapshots
+
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient("http://localhost:6333")
+
+# Keep only the 5 most recent snapshots
+snapshots = client.list_snapshots("my_collection")
+sorted_snapshots = sorted(
+    snapshots,
+    key=lambda s: s.creation_time,
+    reverse=True
+)
+
+# Delete all but the 5 most recent
+for snapshot in sorted_snapshots[5:]:
+    print(f"Deleting: {snapshot.name}")
+    client.delete_snapshot(
+        collection_name="my_collection",
+        snapshot_name=snapshot.name
+    )
+```
+
+## Error Cases
+
+### Snapshot Not Found
+
+If the snapshot doesn't exist:
+
+```json
+{
+  "status": {
+    "error": "Not found: Snapshot not found"
+  },
+  "time": 0.001
+}
+```
+
+### Invalid Snapshot Name
+
+If the snapshot name is malformed:
+
+```json
+{
+  "status": {
+    "error": "Bad request: Invalid snapshot name"
+  },
+  "time": 0.001
+}
+```
+
+## Behavior
+
+- Deletion is permanent and **cannot be undone**
+- The snapshot file is completely removed from disk
+- Collection data is **not affected** - only the snapshot is deleted
+- Multiple snapshots can exist; deletion affects only the specified one
+- No error if snapshot doesn't exist (idempotent operation)
+
+## Safety Considerations
+
+<Warning>
+  Snapshot deletion is irreversible. Ensure you have other backups before deleting snapshots used for disaster recovery.
+</Warning>
+
+### Best Practices
+
+1. **Verify before deletion**: List snapshots to confirm the correct one
+2. **Implement retention policies**: Automate cleanup of old snapshots
+3. **Keep critical snapshots**: Maintain at least one recent snapshot for recovery
+4. **Test recovery first**: Verify snapshot works before deleting
+5. **Document deletion**: Log which snapshots were deleted and when
+
+## Snapshot Retention Strategy
+
+### Example Policy
+
+```python
+def cleanup_snapshots(collection_name, keep_daily=7, keep_weekly=4):
+    """
+    Keep:
+    - Last 7 daily snapshots
+    - Last 4 weekly snapshots (older than 7 days)
+    """
+    snapshots = client.list_snapshots(collection_name)
+    sorted_snapshots = sorted(snapshots, key=lambda s: s.creation_time, reverse=True)
+    
+    now = datetime.now()
+    kept_snapshots = set()
+    
+    # Keep recent dailies
+    for snapshot in sorted_snapshots[:keep_daily]:
+        kept_snapshots.add(snapshot.name)
+    
+    # Keep weeklies
+    weekly_count = 0
+    for snapshot in sorted_snapshots[keep_daily:]:
+        snapshot_date = datetime.fromisoformat(snapshot.creation_time.replace('Z', '+00:00'))
+        if (now - snapshot_date).days >= 7 and weekly_count < keep_weekly:
+            kept_snapshots.add(snapshot.name)
+            weekly_count += 1
+    
+    # Delete everything else
+    for snapshot in sorted_snapshots:
+        if snapshot.name not in kept_snapshots:
+            client.delete_snapshot(collection_name, snapshot.name)
+```
+
+## Related Operations
+
+- [List Snapshots](/api/snapshots/list) - View available snapshots
+- [Create Snapshot](/api/snapshots/create) - Create a new snapshot
+- [Recover from Snapshot](/api/snapshots/recover) - Restore collection from snapshot

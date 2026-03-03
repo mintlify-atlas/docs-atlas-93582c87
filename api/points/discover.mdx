@@ -1,0 +1,195 @@
+---
+title: Discover Points
+api: POST /collections/{name}/points/discover
+---
+
+Discover points that are similar to a target, but constrained by context pairs. This is useful for finding points that are semantically close to a target while maintaining specific relationships.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="consistency" type="string">
+  Read consistency level
+</ParamField>
+
+## Request Body
+
+<ParamField body="target" type="integer | array" required>
+  The target point ID or vector to search for. Results will be similar to this.
+</ParamField>
+
+<ParamField body="context" type="array">
+  Array of context pairs that constrain the search space. Each pair consists of a positive and negative example.
+  
+  <Expandable title="Context Pair">
+    <ParamField body="positive" type="integer | array" required>
+      Point ID or vector representing the positive context
+    </ParamField>
+    
+    <ParamField body="negative" type="integer | array" required>
+      Point ID or vector to repel from
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="limit" type="integer" default="10">
+  Maximum number of results to return
+</ParamField>
+
+<ParamField body="offset" type="integer" default="0">
+  Number of results to skip
+</ParamField>
+
+<ParamField body="filter" type="object">
+  Filter conditions to narrow down the search space
+</ParamField>
+
+<ParamField body="params" type="object">
+  Search parameters
+</ParamField>
+
+<ParamField body="with_payload" type="boolean | array | object" default="false">
+  Select which payload fields to return
+</ParamField>
+
+<ParamField body="with_vector" type="boolean | array" default="false">
+  Whether to return vector data
+</ParamField>
+
+<ParamField body="using" type="string">
+  Name of the vector to use (for named vectors)
+</ParamField>
+
+<ParamField body="lookup_from" type="object">
+  Look for examples in another collection
+</ParamField>
+
+## Response
+
+Same format as search endpoint - array of scored points.
+
+## Examples
+
+### Basic Discovery
+
+Find points similar to a target, constrained by context:
+
+```json
+{
+  "target": 1,
+  "context": [
+    {
+      "positive": 2,
+      "negative": 3
+    }
+  ],
+  "limit": 5
+}
+```
+
+### Discovery with Vector Target
+
+```json
+{
+  "target": [0.2, 0.1, 0.9, 0.7],
+  "context": [
+    {
+      "positive": [0.3, 0.2, 0.8, 0.6],
+      "negative": [0.1, 0.1, 0.1, 0.1]
+    }
+  ],
+  "limit": 10,
+  "with_payload": true
+}
+```
+
+### Discovery with Multiple Context Pairs
+
+```json
+{
+  "target": 100,
+  "context": [
+    {
+      "positive": 10,
+      "negative": 20
+    },
+    {
+      "positive": 30,
+      "negative": 40
+    }
+  ],
+  "limit": 5,
+  "filter": {
+    "must": [
+      {
+        "key": "category",
+        "match": {
+          "value": "books"
+        }
+      }
+    ]
+  }
+}
+```
+
+### Discovery with Named Vectors
+
+```json
+{
+  "target": 1,
+  "context": [
+    {
+      "positive": 2,
+      "negative": 3
+    }
+  ],
+  "using": "text-embeddings",
+  "limit": 10,
+  "with_payload": ["title", "author"],
+  "with_vector": false
+}
+```
+
+### Response Example
+
+```json
+{
+  "result": [
+    {
+      "id": 25,
+      "version": 1,
+      "score": 0.89,
+      "payload": {
+        "title": "Discovered Item",
+        "category": "books"
+      }
+    },
+    {
+      "id": 67,
+      "version": 3,
+      "score": 0.82,
+      "payload": {
+        "title": "Related Item",
+        "category": "books"
+      }
+    }
+  ],
+  "status": "ok",
+  "time": 0.006
+}
+```
+
+## Use Cases
+
+### Semantic Search with Context
+
+Discover is particularly useful for:
+- Finding items similar to a target while maintaining certain attributes
+- Constrained recommendation systems
+- Context-aware semantic search
+- Exploring semantic neighborhoods with specific constraints

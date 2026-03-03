@@ -1,0 +1,265 @@
+---
+title: Sharding
+description: Configure sharding strategies and shard keys for horizontal scaling
+---
+
+Sharding distributes your collection data across multiple shards for horizontal scaling and improved performance. Qdrant supports two sharding methods: automatic and custom.
+
+## Sharding Methods
+
+Qdrant offers two sharding strategies:
+
+<ParamField path="sharding_method" type="string" default="auto">
+  Defines how points are distributed across shards
+  - `auto` - Points are automatically distributed across all available shards
+  - `custom` - Points are distributed based on shard keys
+</ParamField>
+
+### Auto Sharding
+
+With auto sharding, Qdrant automatically distributes points across shards using consistent hashing:
+
+```json
+{
+  "vectors": {
+    "size": 768,
+    "distance": "Cosine"
+  },
+  "shard_number": 4,
+  "sharding_method": "auto"
+}
+```
+
+### Custom Sharding
+
+Custom sharding allows you to control point distribution using shard keys. This is useful for multi-tenancy and data isolation:
+
+```json
+{
+  "vectors": {
+    "size": 768,
+    "distance": "Cosine"
+  },
+  "shard_number": 4,
+  "sharding_method": "custom"
+}
+```
+
+## Shard Keys
+
+Shard keys enable custom data partitioning. Each shard key maps to one or more shards.
+
+### Creating Shard Keys
+
+Create a shard key with specific placement across cluster nodes:
+
+```http
+PUT /collections/{collection_name}/shards
+```
+
+```json
+{
+  "shard_key": "user_123",
+  "shards_number": 2,
+  "placement": [
+    [1, 2],  // Shard replicas on peers 1 and 2
+    [3, 4]   // Shard replicas on peers 3 and 4
+  ]
+}
+```
+
+<Note>
+Shard keys can only be created when `sharding_method` is set to `custom`.
+</Note>
+
+### Using Shard Keys
+
+When inserting or querying points, specify the shard key to route operations:
+
+```json
+{
+  "points": [
+    {
+      "id": 1,
+      "vector": [0.1, 0.2, 0.3],
+      "payload": {"user_id": "user_123"}
+    }
+  ],
+  "shard_key": "user_123"
+}
+```
+
+### Shard Key Selector
+
+The shard key selector allows flexible routing:
+
+```json
+// Single shard key
+{
+  "shard_key": "user_123"
+}
+
+// Multiple shard keys
+{
+  "shard_key": ["user_123", "user_456"]
+}
+
+// Shard key with fallback
+{
+  "shard_key": {
+    "key": "user_123",
+    "fallback": "default"
+  }
+}
+```
+
+## Managing Shards
+
+### Listing Shard Information
+
+Get shard details for a collection:
+
+```http
+GET /collections/{collection_name}/shards
+```
+
+Response:
+
+```json
+{
+  "result": {
+    "shards": [
+      {
+        "shard_id": 0,
+        "shard_key": "user_123",
+        "replicas": [
+          {
+            "peer_id": 1,
+            "state": "Active"
+          },
+          {
+            "peer_id": 2,
+            "state": "Active"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Deleting Shard Keys
+
+Remove a shard key and its associated shards:
+
+```http
+DELETE /collections/{collection_name}/shards/{shard_key}
+```
+
+<Warning>
+Deleting a shard key removes all points associated with that key. This operation is irreversible.
+</Warning>
+
+## Resharding
+
+Resharding allows you to dynamically scale the number of shards in a collection.
+
+### Scaling Up
+
+Add a new shard to increase capacity:
+
+```http
+POST /collections/{collection_name}/shards
+```
+
+```json
+{
+  "direction": "up",
+  "shard_key": "new_partition",
+  "peer_id": 5
+}
+```
+
+### Scaling Down
+
+Remove a shard to reduce resource usage:
+
+```http
+POST /collections/{collection_name}/shards
+```
+
+```json
+{
+  "direction": "down",
+  "shard_id": 3
+}
+```
+
+<Note>
+Resharding operations happen asynchronously. Points are migrated gradually using hash ring rotation to minimize disruption.
+</Note>
+
+## Hash Ring Router
+
+Qdrant uses consistent hashing to distribute points across shards. During resharding, a dual hash ring system ensures smooth transitions:
+
+- **Read hash ring** - Used for querying during migration
+- **Write hash ring** - Used for new point insertions
+
+This approach prevents data duplication and ensures consistent query results during resharding.
+
+## Performance Considerations
+
+### Shard Size
+
+<ParamField path="shard_number" type="integer" default="1">
+  Number of shards in the collection. More shards enable:
+  - Better parallelization for large datasets
+  - Finer-grained resource distribution
+  - Improved write throughput
+</ParamField>
+
+**Recommendations:**
+- Small collections (< 1M points): 1-2 shards
+- Medium collections (1M-10M points): 2-8 shards
+- Large collections (> 10M points): 8+ shards
+
+### Shard Key Cardinality
+
+Choose shard keys with appropriate cardinality:
+
+- **High cardinality** (e.g., user IDs): Better load distribution but more overhead
+- **Low cardinality** (e.g., regions): Simpler management but potential hotspots
+
+## Multi-Tenant Use Cases
+
+Shard keys are ideal for multi-tenant applications:
+
+```json
+{
+  "points": [
+    {
+      "id": 1,
+      "vector": [0.1, 0.2, 0.3],
+      "payload": {
+        "tenant_id": "acme_corp",
+        "document_id": "doc_123"
+      }
+    }
+  ],
+  "shard_key": "acme_corp"
+}
+```
+
+This ensures:
+- Complete data isolation between tenants
+- Independent scaling per tenant
+- Simplified tenant deletion
+
+## Source Code References
+
+Key implementation files:
+
+- `lib/collection/src/collection/sharding_keys.rs:60` - Shard key creation
+- `lib/collection/src/collection/resharding.rs:29` - Resharding logic
+- `lib/collection/src/config.rs:80` - Sharding method configuration

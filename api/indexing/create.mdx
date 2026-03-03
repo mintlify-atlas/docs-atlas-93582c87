@@ -1,0 +1,302 @@
+---
+title: Create Field Index
+openapi: PUT /collections/{collection_name}/index
+---
+
+Create a payload index for a specific field to enable fast filtering. Indexes significantly improve query performance when filtering by payload fields.
+
+## Use Cases
+
+- Enable fast filtering on frequently queried payload fields
+- Optimize search performance with complex filter conditions
+- Support geo-spatial queries with geo indexes
+- Enable full-text search with text indexes
+- Improve range query performance with numeric indexes
+
+## Request Body
+
+<ParamField body="field_name" type="string" required>
+  Name of the payload field to index. Supports nested fields using dot notation (e.g., `metadata.location`).
+  
+  ```json
+  "city"
+  ```
+</ParamField>
+
+<ParamField body="field_schema" type="object">
+  Optional schema configuration for the index. Can be a simple type string or an object with parameters.
+  
+  **Simple type (auto-configured):**
+  ```json
+  "keyword"
+  ```
+  
+  **With parameters:**
+  ```json
+  {
+    "type": "text",
+    "tokenizer": "word",
+    "min_token_len": 2,
+    "max_token_len": 20
+  }
+  ```
+</ParamField>
+
+## Index Types
+
+### Keyword Index
+
+For exact string matching. Fast and memory-efficient.
+
+```json
+{
+  "field_name": "city",
+  "field_schema": "keyword"
+}
+```
+
+**Parameters:**
+- `type`: `"keyword"`
+- `is_tenant`: Set to `true` for tenant/user ID fields (enables optimizations)
+- `on_disk`: Set to `true` to store index on disk instead of RAM
+
+### Integer Index
+
+For integer values, supports both exact matching and range queries.
+
+```json
+{
+  "field_name": "price",
+  "field_schema": "integer"
+}
+```
+
+**Parameters:**
+- `type`: `"integer"`
+- `lookup`: Enable exact match lookups (default: `true`)
+- `range`: Enable range queries (default: `true`)
+- `is_principal`: Optimize for principal/entity IDs
+- `on_disk`: Store index on disk
+
+### Float Index
+
+For floating-point numbers and range queries.
+
+```json
+{
+  "field_name": "rating",
+  "field_schema": "float"
+}
+```
+
+### Geo Index
+
+For geographic coordinates, enables radius and bounding box searches.
+
+```json
+{
+  "field_name": "location",
+  "field_schema": "geo"
+}
+```
+
+Payload must contain objects with `lat` and `lon` fields:
+```json
+{
+  "location": {
+    "lat": 51.5074,
+    "lon": -0.1278
+  }
+}
+```
+
+### Text Index
+
+For full-text search with tokenization.
+
+```json
+{
+  "field_name": "description",
+  "field_schema": {
+    "type": "text",
+    "tokenizer": "word",
+    "min_token_len": 2,
+    "max_token_len": 20,
+    "lowercase": true
+  }
+}
+```
+
+**Parameters:**
+- `type`: `"text"`
+- `tokenizer`: `"word"`, `"whitespace"`, or `"prefix"`
+- `min_token_len`: Minimum token length (default: 2)
+- `max_token_len`: Maximum token length (default: 20)
+- `lowercase`: Convert to lowercase (default: `true`)
+- `on_disk`: Store index on disk
+
+### Bool Index
+
+For boolean values.
+
+```json
+{
+  "field_name": "available",
+  "field_schema": "bool"
+}
+```
+
+### Datetime Index
+
+For timestamp and date filtering.
+
+```json
+{
+  "field_name": "created_at",
+  "field_schema": "datetime"
+}
+```
+
+### UUID Index
+
+For UUID/GUID values.
+
+```json
+{
+  "field_name": "user_id",
+  "field_schema": {
+    "type": "uuid",
+    "is_tenant": true
+  }
+}
+```
+
+## Query Parameters
+
+<ParamField query="wait" type="boolean" default="true">
+  If `true`, wait for the index to be built before returning. If `false`, the indexing happens in the background.
+</ParamField>
+
+<ParamField query="ordering" type="string">
+  Write ordering guarantees. Options: `weak`, `medium`, `strong`.
+</ParamField>
+
+<ParamField query="timeout" type="integer">
+  Operation timeout in seconds.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  Update operation result
+  
+  <ResponseField name="operation_id" type="integer">
+    Sequential number of the operation
+  </ResponseField>
+  
+  <ResponseField name="status" type="string">
+    Operation status: `completed` or `acknowledged`
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Create Simple Keyword Index
+
+```json
+{
+  "field_name": "city",
+  "field_schema": "keyword"
+}
+```
+
+### Create Integer Index with Range Support
+
+```json
+{
+  "field_name": "price",
+  "field_schema": {
+    "type": "integer",
+    "range": true,
+    "lookup": true
+  }
+}
+```
+
+### Create Text Index for Full-Text Search
+
+```json
+{
+  "field_name": "description",
+  "field_schema": {
+    "type": "text",
+    "tokenizer": "word",
+    "min_token_len": 3,
+    "max_token_len": 15
+  }
+}
+```
+
+### Create Geo Index
+
+```json
+{
+  "field_name": "location",
+  "field_schema": "geo"
+}
+```
+
+### Create Tenant-Optimized Index
+
+```json
+{
+  "field_name": "tenant_id",
+  "field_schema": {
+    "type": "keyword",
+    "is_tenant": true
+  }
+}
+```
+
+### Create On-Disk Index
+
+For large datasets, store index on disk to save RAM:
+
+```json
+{
+  "field_name": "description",
+  "field_schema": {
+    "type": "text",
+    "on_disk": true
+  }
+}
+```
+
+## Index Building Process
+
+1. When you create an index, Qdrant scans all existing points
+2. The index is built based on the current payload values
+3. New points automatically update the index when inserted
+4. If `wait=true`, the response is returned after indexing completes
+5. If `wait=false`, indexing happens in the background
+
+## Performance Considerations
+
+- **Indexing time** depends on collection size and field complexity
+- **Memory usage** increases with indexed fields (use `on_disk` for large datasets)
+- **Query speed** improves dramatically with proper indexes
+- Only index fields you frequently filter on
+- Text indexes are more expensive than keyword indexes
+
+## Related Operations
+
+- [Delete Field Index](/api/indexing/delete) - Remove an existing index
+- [Get Collection Info](/api/collections/get) - View existing indexes

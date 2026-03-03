@@ -1,0 +1,114 @@
+---
+title: Get Point
+api: GET /collections/{name}/points/{id}
+---
+
+Retrieve a single point by its ID from a collection.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection
+</ParamField>
+
+<ParamField path="id" type="integer | string" required>
+  Point ID to retrieve. Can be an integer or UUID string.
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="consistency" type="string">
+  Read consistency level:
+  - `majority` - Wait for majority of replicas to respond
+  - `quorum` - Wait for quorum of replicas
+  - `all` - Wait for all replicas
+  - Integer value for specific number of replicas
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  <Expandable title="Point Record">
+    <ResponseField name="id" type="integer | string">
+      Point ID
+    </ResponseField>
+    
+    <ResponseField name="payload" type="object">
+      Payload data associated with the point
+    </ResponseField>
+    
+    <ResponseField name="vector" type="array | object">
+      Vector data. Format depends on collection configuration:
+      - Single vector: `[0.1, 0.2, 0.3, ...]`
+      - Named vectors: `{"image": [0.1, 0.2], "text": [0.3, 0.4]}`
+    </ResponseField>
+    
+    <ResponseField name="shard_key" type="string">
+      Shard key if the collection uses sharding
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok` or `error`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Request
+
+```bash
+GET /collections/my_collection/points/1
+```
+
+### Response
+
+```json
+{
+  "result": {
+    "id": 1,
+    "payload": {
+      "city": "Berlin",
+      "price": 1.99,
+      "category": "electronics"
+    },
+    "vector": [0.05, 0.61, 0.76, 0.74]
+  },
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+### Named Vectors Response
+
+```json
+{
+  "result": {
+    "id": 1,
+    "payload": {
+      "name": "Product A"
+    },
+    "vector": {
+      "image": [0.05, 0.61, 0.76, 0.74],
+      "text": [0.19, 0.81, 0.75, 0.11]
+    }
+  },
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+### Error Response
+
+```json
+{
+  "status": {
+    "error": "Point with id 999 does not exists!"
+  },
+  "time": 0.001
+}
+```

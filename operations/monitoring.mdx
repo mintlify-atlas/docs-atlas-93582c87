@@ -1,0 +1,669 @@
+---
+title: Monitoring
+description: Metrics, health checks, and observability for Qdrant
+---
+
+## Overview
+
+Qdrant provides comprehensive monitoring capabilities through Prometheus-compatible metrics, health check endpoints, and detailed telemetry. This enables you to track performance, detect issues early, and maintain optimal cluster health.
+
+## Metrics Endpoint
+
+Qdrant exposes metrics in Prometheus format at the `/metrics` endpoint.
+
+### Accessing Metrics
+
+```bash
+curl http://localhost:6333/metrics
+```
+
+Optionally, run metrics on a separate port:
+
+```yaml
+# config/config.yaml
+service:
+  metrics_port: 6334  # Dedicated metrics port
+```
+
+### Key Metrics
+
+#### Application Metrics
+
+<AccordionGroup>
+  <Accordion title="app_info">
+    Information about the Qdrant server instance.
+    
+    **Type:** Gauge  
+    **Labels:** `name`, `version`
+    
+    ```prometheus
+    app_info{name="qdrant",version="1.8.0"} 1
+    ```
+  </Accordion>
+
+  <Accordion title="app_status_recovery_mode">
+    Indicates if Qdrant is running in recovery mode.
+    
+    **Type:** Gauge  
+    **Values:** `1` (recovery mode), `0` (normal mode)
+  </Accordion>
+</AccordionGroup>
+
+#### Collection Metrics
+
+<AccordionGroup>
+  <Accordion title="collections_total">
+    Total number of collections in the system.
+    
+    **Type:** Gauge
+    
+    ```prometheus
+    collections_total 5
+    ```
+  </Accordion>
+
+  <Accordion title="collections_vector_total">
+    Total number of vectors across all collections.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="collection_points">
+    Approximate number of points per collection.
+    
+    **Type:** Gauge  
+    **Labels:** `id` (collection name)
+    
+    ```prometheus
+    collection_points{id="my_collection"} 1000000
+    ```
+  </Accordion>
+
+  <Accordion title="collection_vectors">
+    Number of vectors grouped by vector name.
+    
+    **Type:** Gauge  
+    **Labels:** `collection`, `vector`
+    
+    ```prometheus
+    collection_vectors{collection="products",vector="image"} 50000
+    collection_vectors{collection="products",vector="text"} 50000
+    ```
+  </Accordion>
+</AccordionGroup>
+
+#### Cluster Metrics
+
+<AccordionGroup>
+  <Accordion title="cluster_enabled">
+    Whether cluster mode is enabled.
+    
+    **Type:** Gauge  
+    **Values:** `1` (enabled), `0` (disabled)
+  </Accordion>
+
+  <Accordion title="cluster_peers_total">
+    Total number of peers in the cluster.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="cluster_term">
+    Current consensus term number.
+    
+    **Type:** Counter
+  </Accordion>
+
+  <Accordion title="cluster_commit">
+    Index of last committed operation the peer is aware of.
+    
+    **Type:** Counter  
+    **Labels:** `peer_id`
+  </Accordion>
+
+  <Accordion title="cluster_pending_operations_total">
+    Number of pending consensus operations.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="cluster_working_state">
+    Working state of the cluster consensus.
+    
+    **Type:** Gauge  
+    **Labels:** `state` (`working`, `stopped`)
+  </Accordion>
+</AccordionGroup>
+
+#### Replica Metrics
+
+<AccordionGroup>
+  <Accordion title="collection_active_replicas_min">
+    Minimum number of active replicas across all shards.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="collection_active_replicas_max">
+    Maximum number of active replicas across all shards.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="collection_dead_replicas">
+    Total number of shard replicas in non-active state.
+    
+    **Type:** Gauge
+  </Accordion>
+</AccordionGroup>
+
+#### Shard Transfer Metrics
+
+<AccordionGroup>
+  <Accordion title="collection_shard_transfer_incoming">
+    Number of incoming shard transfers currently running.
+    
+    **Type:** Gauge  
+    **Labels:** `id` (collection name)
+  </Accordion>
+
+  <Accordion title="collection_shard_transfer_outgoing">
+    Number of outgoing shard transfers currently running.
+    
+    **Type:** Gauge  
+    **Labels:** `id` (collection name)
+  </Accordion>
+</AccordionGroup>
+
+#### Request Metrics
+
+<AccordionGroup>
+  <Accordion title="rest_responses_total">
+    Total number of REST API responses.
+    
+    **Type:** Counter  
+    **Labels:** `method`, `endpoint`, `status`
+    
+    ```prometheus
+    rest_responses_total{method="POST",endpoint="/collections/{name}/points/search",status="200"} 1523
+    ```
+  </Accordion>
+
+  <Accordion title="rest_responses_duration_seconds">
+    Histogram of REST API response durations.
+    
+    **Type:** Histogram  
+    **Labels:** `method`, `endpoint`, `status`
+  </Accordion>
+
+  <Accordion title="grpc_responses_total">
+    Total number of gRPC responses.
+    
+    **Type:** Counter  
+    **Labels:** `endpoint`, `status`
+  </Accordion>
+
+  <Accordion title="grpc_responses_duration_seconds">
+    Histogram of gRPC response durations.
+    
+    **Type:** Histogram  
+    **Labels:** `endpoint`, `status`
+  </Accordion>
+</AccordionGroup>
+
+#### Memory Metrics
+
+<AccordionGroup>
+  <Accordion title="memory_active_bytes">
+    Total bytes in active pages allocated by the application.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="memory_allocated_bytes">
+    Total bytes allocated by the application.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="memory_resident_bytes">
+    Maximum bytes in physically resident data pages.
+    
+    **Type:** Gauge
+  </Accordion>
+</AccordionGroup>
+
+#### System Metrics (Linux)
+
+<AccordionGroup>
+  <Accordion title="process_threads">
+    Count of active threads.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="process_open_fds">
+    Count of currently open file descriptors.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="process_max_fds">
+    Limit for open file descriptors.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="process_open_mmaps">
+    Count of open memory maps.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="system_max_mmaps">
+    System-wide limit of open memory maps.
+    
+    **Type:** Gauge
+  </Accordion>
+
+  <Accordion title="process_minor_page_faults_total">
+    Count of minor page faults (no disk access).
+    
+    **Type:** Counter
+  </Accordion>
+
+  <Accordion title="process_major_page_faults_total">
+    Count of disk accesses caused by page faults.
+    
+    **Type:** Counter
+  </Accordion>
+</AccordionGroup>
+
+#### Optimization Metrics
+
+<AccordionGroup>
+  <Accordion title="collection_running_optimizations">
+    Number of currently running optimization tasks per collection.
+    
+    **Type:** Gauge  
+    **Labels:** `id` (collection name)
+  </Accordion>
+
+  <Accordion title="collection_update_queue_length">
+    Number of pending operations in update queues per collection.
+    
+    **Type:** Gauge  
+    **Labels:** `id` (collection name)
+  </Accordion>
+</AccordionGroup>
+
+#### Snapshot Metrics
+
+<AccordionGroup>
+  <Accordion title="snapshot_creation_running">
+    Number of snapshot creations currently running.
+    
+    **Type:** Gauge  
+    **Labels:** `id` (collection name)
+  </Accordion>
+
+  <Accordion title="snapshot_recovery_running">
+    Number of snapshot recovery operations currently running.
+    
+    **Type:** Gauge  
+    **Labels:** `id` (collection name)
+  </Accordion>
+
+  <Accordion title="snapshot_created_total">
+    Total number of snapshots created.
+    
+    **Type:** Counter  
+    **Labels:** `id` (collection name)
+  </Accordion>
+</AccordionGroup>
+
+## Health Checks
+
+### Liveness Probe
+
+Check if the Qdrant service is running:
+
+```bash
+curl http://localhost:6333/
+```
+
+**Response:**
+```json
+{
+  "title": "qdrant - vector search engine",
+  "version": "1.8.0"
+}
+```
+
+### Readiness Probe
+
+Check if Qdrant is ready to serve requests:
+
+```bash
+curl http://localhost:6333/readyz
+```
+
+**States:**
+- `200 OK` - Service is ready
+- `503 Service Unavailable` - Service is starting or catching up
+
+The readiness probe checks:
+1. **Cluster sync** - Node has caught up with cluster consensus
+2. **Shard health** - All local shards are healthy and active
+3. **Bootstrap** - Node has joined the cluster (if `--bootstrap` was used)
+
+<Note>
+The `/readyz` endpoint is particularly useful in Kubernetes for pod readiness probes during rolling updates and cluster formation.
+</Note>
+
+### Kubernetes Health Check Example
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: qdrant
+spec:
+  containers:
+  - name: qdrant
+    image: qdrant/qdrant:latest
+    ports:
+    - containerPort: 6333
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 6333
+      initialDelaySeconds: 10
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /readyz
+        port: 6333
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+```
+
+## Prometheus Integration
+
+### Prometheus Configuration
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'qdrant'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:6333']
+    metrics_path: /metrics
+```
+
+### Prometheus Queries
+
+#### Request Rate
+
+```promql
+# Total request rate
+rate(rest_responses_total[5m])
+
+# Request rate by endpoint
+sum(rate(rest_responses_total[5m])) by (endpoint)
+
+# Error rate
+sum(rate(rest_responses_total{status!="200"}[5m])) by (endpoint)
+```
+
+#### Latency
+
+```promql
+# Average latency by endpoint
+rate(rest_responses_duration_seconds_sum[5m]) / rate(rest_responses_duration_seconds_count[5m])
+
+# 95th percentile latency
+histogram_quantile(0.95, rate(rest_responses_duration_seconds_bucket[5m]))
+```
+
+#### Collection Growth
+
+```promql
+# Point growth rate
+rate(collection_points[5m])
+
+# Vector count by collection
+sum(collection_vectors) by (collection)
+```
+
+#### Cluster Health
+
+```promql
+# Active replicas below minimum
+collection_active_replicas_min < 1
+
+# Dead replicas count
+collection_dead_replicas > 0
+
+# Cluster working state
+cluster_working_state{state="stopped"} == 1
+```
+
+#### Resource Usage
+
+```promql
+# Memory usage trend
+memory_resident_bytes
+
+# Open file descriptors utilization
+(process_open_fds / process_max_fds) * 100
+
+# Memory map utilization
+(process_open_mmaps / system_max_mmaps) * 100
+```
+
+## Grafana Dashboards
+
+### Sample Dashboard Panels
+
+<CodeGroup>
+
+```json Panel: Request Rate
+{
+  "title": "Request Rate",
+  "targets": [
+    {
+      "expr": "sum(rate(rest_responses_total[5m])) by (endpoint)"
+    }
+  ],
+  "type": "graph"
+}
+```
+
+```json Panel: Cluster Health
+{
+  "title": "Active Replicas",
+  "targets": [
+    {
+      "expr": "collection_active_replicas_min",
+      "legendFormat": "Minimum Active Replicas"
+    },
+    {
+      "expr": "collection_active_replicas_max",
+      "legendFormat": "Maximum Active Replicas"
+    }
+  ],
+  "type": "graph"
+}
+```
+
+```json Panel: Collection Size
+{
+  "title": "Collection Points",
+  "targets": [
+    {
+      "expr": "collection_points",
+      "legendFormat": "{{ id }}"
+    }
+  ],
+  "type": "graph"
+}
+```
+
+</CodeGroup>
+
+## Telemetry API
+
+For detailed system information, use the telemetry endpoint:
+
+```bash
+curl http://localhost:6333/telemetry
+```
+
+**Query Parameters:**
+- `anonymize` - Anonymize sensitive data (default: false)
+- `details_level` - Level of detail (0-2, default: 0)
+- `timeout` - Timeout in seconds
+
+Example:
+```bash
+curl "http://localhost:6333/telemetry?anonymize=true&details_level=1"
+```
+
+## Alerting Rules
+
+### Prometheus Alert Examples
+
+```yaml
+groups:
+  - name: qdrant_alerts
+    rules:
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(rest_responses_total{status!="200"}[5m]))
+          /
+          sum(rate(rest_responses_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      # Cluster not healthy
+      - alert: ClusterUnhealthy
+        expr: collection_active_replicas_min < 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Cluster has unhealthy shards"
+          description: "Minimum active replicas is {{ $value }}"
+
+      # Dead replicas
+      - alert: DeadReplicas
+        expr: collection_dead_replicas > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead replicas detected"
+          description: "{{ $value }} dead replicas found"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: memory_resident_bytes > 8e9  # 8GB
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value | humanize }}B"
+
+      # File descriptor exhaustion
+      - alert: HighFDUsage
+        expr: (process_open_fds / process_max_fds) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "File descriptor usage high"
+          description: "FD usage is {{ $value | humanizePercentage }}"
+
+      # Long-running optimizations
+      - alert: LongRunningOptimization
+        expr: collection_running_optimizations > 0
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Long-running optimization detected"
+          description: "Optimization running for over 1 hour on {{ $labels.id }}"
+
+      # Consensus stopped
+      - alert: ConsensusStoppedWith large update queue
+      - alert: LargeUpdateQueue
+        expr: collection_update_queue_length > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Large update queue"
+          description: "{{ $value }} pending operations in {{ $labels.id }}"
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Scrape Interval" icon="clock">
+    Use 15-30 second scrape intervals for Prometheus to balance freshness and overhead.
+  </Card>
+  
+  <Card title="Retention" icon="database">
+    Keep metrics for at least 30 days to identify trends and seasonal patterns.
+  </Card>
+  
+  <Card title="Dashboards" icon="chart-line">
+    Create separate dashboards for overview, collections, cluster, and resource metrics.
+  </Card>
+  
+  <Card title="Alerting" icon="bell">
+    Set up alerts for cluster health, error rates, and resource exhaustion.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Metrics endpoint returns 404">
+    Ensure Qdrant is running and accessible. The `/metrics` endpoint is enabled by default.
+  </Accordion>
+
+  <Accordion title="High cardinality warnings">
+    Qdrant uses whitelisted endpoints to prevent high cardinality. Only key endpoints are tracked in metrics.
+  </Accordion>
+
+  <Accordion title="Missing cluster metrics">
+    Cluster metrics only appear when cluster mode is enabled (`cluster.enabled: true`).
+  </Accordion>
+
+  <Accordion title="Memory metrics show zero">
+    Memory metrics use jemalloc stats. Ensure Qdrant is built with jemalloc support.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Backup & Restore" icon="floppy-disk" href="/operations/backup-restore">
+    Learn about backup strategies and recovery procedures
+  </Card>
+  
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Common issues and solutions
+  </Card>
+</CardGroup>

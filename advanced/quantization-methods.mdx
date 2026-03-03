@@ -1,0 +1,423 @@
+---
+title: Quantization Methods
+description: Understand and implement scalar, product, and binary quantization to reduce memory usage and improve search performance
+---
+
+Quantization compresses vector embeddings to reduce memory footprint and accelerate search operations. Qdrant supports three quantization methods, each offering different trade-offs between compression ratio, search quality, and performance.
+
+## Overview
+
+Quantization works by encoding high-precision floating-point vectors into lower-precision representations:
+
+- **Scalar Quantization (SQ)**: Maps float32 values to int8, achieving 4x compression
+- **Product Quantization (PQ)**: Divides vectors into chunks and replaces them with centroid indices, achieving 16-64x compression
+- **Binary Quantization (BQ)**: Encodes vectors as binary codes, achieving 32x compression
+
+All quantization methods are implemented in `lib/quantization/` with SIMD optimizations for x86_64 (SSE, AVX, AVX-512) and ARM (NEON) architectures.
+
+## Scalar Quantization
+
+### How It Works
+
+Scalar quantization (`lib/quantization/src/encoded_vectors_u8.rs`) converts float32 values to int8 using linear mapping:
+
+```rust
+// Encoding formula
+encoded_value = (original_value - offset) / alpha
+```
+
+Where:
+- `alpha = (max - min) / 127.0` - scaling factor
+- `offset = min` - minimum value in the dataset
+
+### Configuration
+
+```json
+{
+  "quantization_config": {
+    "scalar": {
+      "type": "int8",
+      "quantile": 0.99,
+      "always_ram": true
+    }
+  }
+}
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | string | `"int8"` | Quantization type (currently only int8 supported) |
+| `quantile` | float | `null` | Use quantile-based range instead of min/max (reduces outlier impact) |
+| `always_ram` | bool | `false` | Keep quantized vectors in RAM (faster search) |
+
+### Performance Characteristics
+
+**Compression:** 4x (32 bits → 8 bits per component)
+
+**Search Speed:** Uses SIMD instructions for fast distance calculations:
+- **AVX2 + FMA**: `impl_score_dot_avx()` - lib/quantization/src/encoded_vectors_u8.rs:446
+- **SSE4.1**: `impl_score_dot_sse()` - lib/quantization/src/encoded_vectors_u8.rs:404
+- **NEON**: `impl_score_dot_neon()` - lib/quantization/src/encoded_vectors_u8.rs:362
+
+**Accuracy:** Typically 95-99% recall compared to full precision, depending on vector distribution.
+
+### Best Practices
+
+1. **Use quantile parameter** for datasets with outliers:
+   ```json
+   {"quantile": 0.99}  // Ignore top/bottom 1% values
+   ```
+
+2. **Enable always_ram** for latency-sensitive applications:
+   ```json
+   {"always_ram": true}  // Keep in memory, not mmap
+   ```
+
+3. **Rescore strategy**: Use with oversampling and rescoring:
+   ```python
+   client.search(
+       collection_name="my_collection",
+       query_vector=[...],
+       limit=10,
+       search_params={
+           "quantization": {
+               "rescore": True,
+               "oversampling": 2.0  # Fetch 2x candidates
+           }
+       }
+   )
+   ```
+
+## Product Quantization
+
+### How It Works
+
+Product quantization (`lib/quantization/src/encoded_vectors_pq.rs`) divides vectors into subvectors and replaces each with a centroid index:
+
+1. **Divide** vector into chunks (e.g., 1024-dim → 512 chunks of 2 dims)
+2. **Cluster** each chunk position using k-means (typically 256 centroids)
+3. **Encode** by replacing chunks with centroid indices (uint8)
+
+### Configuration
+
+```json
+{
+  "quantization_config": {
+    "product": {
+      "compression": "x16",
+      "always_ram": true
+    }
+  }
+}
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `compression` | string | `"x16"` | Compression ratio: `"x8"`, `"x16"`, `"x32"`, `"x64"` |
+| `always_ram` | bool | `false` | Keep quantized vectors in RAM |
+
+### Implementation Details
+
+**K-means Training** (`lib/quantization/src/kmeans.rs`):
+- Sample size: 10,000 vectors (KMEANS_SAMPLE_SIZE)
+- Max iterations: 100 (KMEANS_MAX_ITERATIONS)
+- Convergence threshold: 1e-5 (KMEANS_ACCURACY)
+- Centroids: 256 per chunk (CENTROIDS_COUNT)
+
+**Lookup Table (LUT) Scoring** (`lib/quantization/src/encoded_vectors_pq.rs:511`):
+```rust
+// Pre-compute distances from query chunks to all centroids
+for range in &self.metadata.vector_division {
+    let subquery = &query[range.clone()];
+    for centroid in &self.metadata.centroids {
+        lut.push(distance(subquery, centroid));
+    }
+}
+```
+
+### Performance Characteristics
+
+**Compression:**
+- x16: ~16x compression (typical for 128-1024 dim vectors)
+- x32: ~32x compression (for high-dimensional vectors)
+- x64: ~64x compression (aggressive, lower accuracy)
+
+**Search Speed:** SIMD-optimized LUT lookups:
+- **SSE4.1**: `score_point_sse()` - lib/quantization/src/encoded_vectors_pq.rs:405
+- **NEON**: `score_point_neon()` - lib/quantization/src/encoded_vectors_pq.rs:441
+
+**Training Time:** Depends on vector count and dimensionality. For 100K vectors of 1024 dimensions:
+- Training: ~30-60 seconds
+- Encoding: ~10-20 seconds
+
+### Best Practices
+
+1. **Start with x16 compression** - good balance between speed and accuracy
+
+2. **Increase compression for larger datasets:**
+   - < 1M vectors: x16
+   - 1M - 10M vectors: x32  
+   - > 10M vectors: x64
+
+3. **Always use with rescoring** - PQ approximation requires refinement:
+   ```json
+   {
+     "search_params": {
+       "quantization": {
+         "rescore": true,
+         "oversampling": 3.0
+       }
+     }
+   }
+   ```
+
+## Binary Quantization
+
+### How It Works
+
+Binary quantization (`lib/quantization/src/encoded_vectors_binary.rs`) encodes vectors using bit representations:
+
+**1-bit encoding:**
+```rust
+bit = if value > 0.0 { 1 } else { 0 }
+```
+
+**2-bit encoding** (with statistical zero):
+```rust
+let z_score = (value - mean) / stddev;
+if z_score <= -0.67 { 0b00 }      // Negative
+else if z_score < 0.67 { 0b10 }   // Near zero  
+else { 0b11 }                      // Positive
+```
+
+**1.5-bit encoding**: Combines 2-bit with compression by merging adjacent bits.
+
+### Configuration
+
+```json
+{
+  "quantization_config": {
+    "binary": {
+      "encoding": "one_bit",
+      "query_encoding": "scalar_4bits",
+      "always_ram": true
+    }
+  }
+}
+```
+
+**Parameters:**
+
+| Parameter | Type | Options | Description |
+|-----------|------|---------|-------------|
+| `encoding` | string | `"one_bit"`, `"two_bits"`, `"one_and_half_bits"` | Storage encoding method |
+| `query_encoding` | string | `"same_as_storage"`, `"scalar_4bits"`, `"scalar_8bits"` | Query vector encoding |
+| `always_ram` | bool | `false` | Keep in RAM |
+
+### Encoding Modes
+
+#### One-Bit Encoding
+
+**Compression:** 32x (32 bits → 1 bit)
+**Use case:** Normalized vectors (e.g., OpenAI, Cohere embeddings)
+**Accuracy:** 95-98% recall for suitable datasets
+
+#### Two-Bits Encoding  
+
+**Compression:** 16x (32 bits → 2 bits)
+**Use case:** Vectors with wide value ranges
+**Accuracy:** 97-99% recall
+**Implementation:** lib/quantization/src/encoded_vectors_binary.rs:554
+
+#### One-and-Half-Bits Encoding
+
+**Compression:** 21.3x (32 bits → 1.5 bits)
+**Use case:** Balance between 1-bit and 2-bit
+**Accuracy:** 96-98.5% recall
+**Implementation:** lib/quantization/src/encoded_vectors_binary.rs:575
+
+### Query Encoding Strategies
+
+**Scalar Query Encoding** (`lib/quantization/src/encoded_vectors_binary.rs:676`):
+
+Instead of binary query encoding, use 4-bit or 8-bit scalar values for higher accuracy:
+
+```rust
+// Transposed bit layout for efficient XOR operations
+let max_abs_value = query.iter().map(|x| x.abs()).fold(0.0, f32::max);
+let ranges = (1 << bits_count) - 1;  // 15 for 4-bit, 255 for 8-bit
+let quantized = ((value - min) / delta * ranges).round();
+```
+
+**Performance impact:**
+- `scalar_4bits`: +10-15% better recall, ~5% slower
+- `scalar_8bits`: +15-20% better recall, ~10% slower
+
+### Performance Characteristics
+
+**Search Speed:** XOR + POPCOUNT operations with SIMD:
+- **AVX-512**: `impl_xor_popcnt_avx512_uint128()` - lib/quantization/src/encoded_vectors_binary.rs:1064
+- **AVX2**: `impl_xor_popcnt_scalar8_avx_uint128()` - lib/quantization/src/encoded_vectors_binary.rs:999
+- **SSE4.2**: `impl_xor_popcnt_sse_uint128()` - lib/quantization/src/encoded_vectors_binary.rs:981
+- **NEON**: `impl_xor_popcnt_neon_uint128()` - lib/quantization/src/encoded_vectors_binary.rs:1026
+
+**Distance Approximation** (`lib/quantization/src/encoded_vectors_binary.rs:760`):
+- Dot product: `NXOR(a, b) ≈ dot(a, b)`
+- L1 distance: `XOR(a, b) ≈ |a - b|`  
+- L2 distance: `XOR(a, b) ≈ (a - b)²`
+
+### Best Practices
+
+1. **Use 1-bit for normalized embeddings:**
+   ```json
+   {"encoding": "one_bit"}  // Perfect for OpenAI/Cohere
+   ```
+
+2. **Use 2-bit for general-purpose vectors:**
+   ```json
+   {"encoding": "two_bits"}  // Better accuracy, still 16x compression
+   ```
+
+3. **Enable scalar query encoding:**
+   ```json
+   {
+     "encoding": "one_bit",
+     "query_encoding": "scalar_4bits"  // Improves recall
+   }
+   ```
+
+4. **Always enable rescoring:**
+   ```json
+   {
+     "search_params": {
+       "quantization": {
+         "rescore": true,
+         "oversampling": 2.0
+       }
+     }
+   }
+   ```
+
+## Comparison Matrix
+
+| Method | Compression | Speed | Accuracy | Best For |
+|--------|-------------|-------|----------|----------|
+| **Scalar (int8)** | 4x | Fast | 95-99% | General purpose, fast search |
+| **Product (x16)** | 16x | Medium | 93-97% | Large datasets, memory constraints |
+| **Product (x64)** | 64x | Medium | 85-93% | Massive datasets |
+| **Binary (1-bit)** | 32x | Very Fast | 95-98%* | Normalized embeddings |
+| **Binary (2-bit)** | 16x | Very Fast | 97-99% | Wide value ranges |
+
+*Accuracy depends on vector normalization and distribution
+
+## Combining Quantization with HNSW
+
+Quantization works seamlessly with HNSW indexing:
+
+```json
+{
+  "vectors": {
+    "size": 1536,
+    "distance": "Cosine",
+    "hnsw_config": {
+      "m": 16,
+      "ef_construct": 100
+    },
+    "quantization_config": {
+      "scalar": {
+        "type": "int8",
+        "quantile": 0.99,
+        "always_ram": true
+      }
+    }
+  }
+}
+```
+
+**Search flow:**
+1. HNSW navigates using quantized vectors (fast approximate distances)
+2. Rescore top candidates with original vectors (high accuracy)
+3. Return final results
+
+## Monitoring and Tuning
+
+Check quantization statistics:
+
+```python
+response = client.get_collection(collection_name="my_collection")
+print(response.config.params.vectors.quantization_config)
+print(response.vectors_count)  # Total vectors
+```
+
+Benchmark search quality:
+
+```python
+import numpy as np
+
+# Search with quantization
+quant_results = client.search(
+    collection_name="test",
+    query_vector=query,
+    limit=100
+)
+
+# Search without quantization (ground truth)
+full_results = client.search(
+    collection_name="test_full",
+    query_vector=query, 
+    limit=100
+)
+
+# Calculate recall
+quant_ids = {r.id for r in quant_results}
+full_ids = {r.id for r in full_results}
+recall = len(quant_ids & full_ids) / len(full_ids)
+print(f"Recall@100: {recall:.2%}")
+```
+
+## Migration Guide
+
+Enable quantization on existing collection:
+
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient("localhost", port=6333)
+
+# Update collection config
+client.update_collection(
+    collection_name="my_collection",
+    quantization_config={
+        "scalar": {
+            "type": "int8",
+            "quantile": 0.99,
+            "always_ram": True
+        }
+    }
+)
+
+# Trigger optimization to apply quantization
+client.update_collection(
+    collection_name="my_collection",
+    optimizer_config={
+        "indexing_threshold": 10000
+    }
+)
+```
+
+The optimization process will:
+1. Create quantized versions of segments
+2. Build new HNSW indices with quantized vectors  
+3. Swap to optimized segments atomically
+
+## References
+
+- Scalar Quantization Implementation: `lib/quantization/src/encoded_vectors_u8.rs`
+- Product Quantization Implementation: `lib/quantization/src/encoded_vectors_pq.rs`
+- Binary Quantization Implementation: `lib/quantization/src/encoded_vectors_binary.rs`
+- K-means Clustering: `lib/quantization/src/kmeans.rs`
+- SIMD Optimizations: `lib/quantization/build.rs`

@@ -1,0 +1,337 @@
+---
+title: Vectors
+description: Understanding vector types, dimensions, and distance metrics in Qdrant
+---
+
+Vectors are the fundamental data structure in Qdrant. Each vector represents data (text, images, audio, etc.) as numerical embeddings in a high-dimensional space.
+
+## Vector Types
+
+Qdrant supports three primary vector types:
+
+<Tabs>
+  <Tab title="Dense Vectors">
+    Standard floating-point vectors with a fixed dimensionality.
+
+    ```json
+    {
+      "vector": [0.875, 0.140625, 0.8976]
+    }
+    ```
+
+    **Source:** `lib/api/src/rest/schema.rs:24-25`
+
+    Dense vectors are the most common type, ideal for:
+    - Text embeddings (OpenAI, Cohere, etc.)
+    - Image embeddings (CLIP, ResNet)
+    - Audio embeddings
+  </Tab>
+
+  <Tab title="Sparse Vectors">
+    Vectors with only non-zero values stored, defined by indices and values.
+
+    ```json
+    {
+      "vector": {
+        "indices": [0, 5, 10],
+        "values": [0.5, 0.8, 0.3]
+      }
+    }
+    ```
+
+    **Source:** `sparse::common::sparse_vector::SparseVector`
+
+    Sparse vectors are efficient for:
+    - High-dimensional data with few non-zero values
+    - BM25 and TF-IDF representations
+    - Keyword-based search
+  </Tab>
+
+  <Tab title="Multi-Dense Vectors">
+    Multiple dense vectors per point, useful for late interaction models.
+
+    ```json
+    {
+      "vector": [
+        [0.875, 0.140625, 0.1102],
+        [0.758, 0.28126, 0.96871],
+        [0.621, 0.421878, 0.9375]
+      ]
+    }
+    ```
+
+    **Source:** `lib/api/src/rest/schema.rs:70-76`
+
+    Multi-dense vectors support:
+    - ColBERT-style models
+    - Token-level embeddings
+    - MaxSim comparator for scoring
+  </Tab>
+</Tabs>
+
+## Vector Storage Types
+
+Qdrant provides multiple storage backends optimized for different use cases:
+
+```rust
+pub enum VectorStorageType {
+    Memory,           // In-memory storage (fastest)
+    Mmap,            // Memory-mapped file (not appendable)
+    ChunkedMmap,     // Chunked mmap (appendable, on disk)
+    InRamChunkedMmap, // Chunked mmap locked in RAM
+    InRamMmap,       // Mmap pre-fetched into RAM
+}
+```
+
+**Source:** `lib/segment/src/types.rs:1495-1513`
+
+<CardGroup cols={2}>
+  <Card title="Memory" icon="memory">
+    Stores vectors entirely in RAM for maximum performance. Best for small to medium collections.
+  </Card>
+  <Card title="ChunkedMmap" icon="hard-drive">
+    Appendable disk-based storage. Performance depends on disk speed and OS cache.
+  </Card>
+  <Card title="InRamChunkedMmap" icon="lock">
+    Vectors locked in RAM, avoiding cold disk requests. Replacement for Memory without RocksDB dependency.
+  </Card>
+  <Card title="Mmap" icon="file">
+    Single memory-mapped file, not appendable. Used for optimized segments.
+  </Card>
+</CardGroup>
+
+## Vector Data Types
+
+Vectors can be stored in different precision formats:
+
+```rust
+pub enum VectorStorageDatatype {
+    Float32,  // Single-precision (default)
+    Float16,  // Half-precision (50% memory reduction)
+    Uint8,    // 8-bit unsigned integer (75% memory reduction)
+}
+```
+
+**Source:** `lib/segment/src/types.rs:1528-1536`
+
+<Tabs>
+  <Tab title="Float32">
+    - **Precision:** 32-bit floating point
+    - **Memory:** 4 bytes per dimension
+    - **Use case:** Maximum precision, default choice
+  </Tab>
+  <Tab title="Float16">
+    - **Precision:** 16-bit floating point
+    - **Memory:** 2 bytes per dimension (50% reduction)
+    - **Use case:** Balanced precision/memory trade-off
+    - **Supported operations:** Distance calculation with hardware acceleration (AVX, NEON, SSE)
+  </Tab>
+  <Tab title="Uint8">
+    - **Precision:** 8-bit unsigned integer
+    - **Memory:** 1 byte per dimension (75% reduction)
+    - **Use case:** Extreme memory savings with minimal accuracy loss
+    - **Note:** Requires vector normalization to [0, 255] range
+  </Tab>
+</Tabs>
+
+## Distance Metrics
+
+Qdrant implements four distance functions for vector comparison:
+
+```rust
+pub enum Distance {
+    Cosine,      // Cosine similarity
+    Euclid,      // Euclidean distance
+    Dot,         // Dot product
+    Manhattan,   // Manhattan (L1) distance
+}
+```
+
+**Source:** `lib/segment/src/types.rs:306-315`
+
+### Cosine Distance
+
+<Accordion title="Cosine Similarity Details">
+  Measures the cosine of the angle between two vectors.
+
+  **Formula:**
+  ```
+  similarity = (A · B) / (||A|| × ||B||)
+  distance = 1 - similarity
+  ```
+
+  **Properties:**
+  - Range: [0, 2] (0 = identical, 2 = opposite)
+  - **Ordering:** Larger is better (returns similarity, not distance)
+  - Magnitude-independent
+
+  **Use cases:**
+  - Text embeddings (sentence transformers)
+  - Any pre-normalized vectors
+  - When direction matters more than magnitude
+
+  **Implementation:** `lib/segment/src/spaces/simple.rs` with SIMD optimizations (AVX, SSE, NEON)
+</Accordion>
+
+### Euclidean Distance
+
+<Accordion title="Euclidean Distance Details">
+  Straight-line distance between two points in n-dimensional space.
+
+  **Formula:**
+  ```
+  distance = sqrt(Σ(Ai - Bi)²)
+  ```
+
+  **Properties:**
+  - Range: [0, ∞)
+  - **Ordering:** Smaller is better
+  - Sensitive to magnitude
+
+  **Use cases:**
+  - Image embeddings
+  - When absolute distances matter
+  - Embeddings with meaningful magnitudes
+
+  **Optimization:** Qdrant uses squared Euclidean distance internally to avoid sqrt calculation during search.
+</Accordion>
+
+### Dot Product
+
+<Accordion title="Dot Product Details">
+  Sum of element-wise products of two vectors.
+
+  **Formula:**
+  ```
+  dot_product = Σ(Ai × Bi)
+  ```
+
+  **Properties:**
+  - Range: (-∞, ∞)
+  - **Ordering:** Larger is better
+  - Magnitude-sensitive
+
+  **Use cases:**
+  - Embeddings optimized for dot product (some models)
+  - When both direction and magnitude are important
+
+  **Note:** For normalized vectors, dot product equals cosine similarity.
+</Accordion>
+
+### Manhattan Distance
+
+<Accordion title="Manhattan Distance Details">
+  Sum of absolute differences between vector components.
+
+  **Formula:**
+  ```
+  distance = Σ|Ai - Bi|
+  ```
+
+  **Properties:**
+  - Range: [0, ∞)
+  - **Ordering:** Smaller is better
+  - More robust to outliers than Euclidean
+
+  **Use cases:**
+  - High-dimensional sparse data
+  - When outliers should have less impact
+
+  **Implementation:** SIMD-optimized versions in `lib/segment/src/spaces/metric_uint/` and `lib/segment/src/spaces/metric_f16/`
+</Accordion>
+
+## Hardware Acceleration
+
+Qdrant automatically uses CPU SIMD instructions for distance calculations:
+
+<CodeGroup>
+  ```rust x86_64 (AVX/SSE)
+  // lib/segment/src/spaces/simple_avx.rs
+  // lib/segment/src/spaces/simple_sse.rs
+  target_arch = "x86_64"
+  ```
+
+  ```rust ARM (NEON)
+  // lib/segment/src/spaces/simple_neon.rs
+  target_arch = "aarch64"
+  ```
+</CodeGroup>
+
+SIMD implementations are available for:
+- All distance metrics (Cosine, Euclid, Dot, Manhattan)
+- All data types (Float32, Float16, Uint8)
+- Multiple CPU architectures (x86_64, ARM64)
+
+**Source:** `lib/segment/src/spaces/mod.rs:5-15`
+
+## Vector Configuration Example
+
+```json
+{
+  "vectors": {
+    "size": 384,
+    "distance": "Cosine",
+    "storage_type": "InRamChunkedMmap",
+    "datatype": "Float32"
+  }
+}
+```
+
+For named vectors (multiple vector types per collection):
+
+```json
+{
+  "vectors": {
+    "text": {
+      "size": 768,
+      "distance": "Cosine"
+    },
+    "image": {
+      "size": 512,
+      "distance": "Euclid",
+      "datatype": "Float16"
+    }
+  }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choosing Distance Metrics">
+    - **Cosine:** Most common for text embeddings
+    - **Dot Product:** When using models optimized for it (some OpenAI models)
+    - **Euclidean:** Image embeddings, when magnitude matters
+    - **Manhattan:** High-dimensional sparse vectors, outlier robustness
+  </Accordion>
+
+  <Accordion title="Storage Type Selection">
+    - **Memory:** < 1M vectors, maximum speed
+    - **InRamChunkedMmap:** 1M-10M vectors, good balance
+    - **ChunkedMmap:** > 10M vectors, cost-effective
+    - **Mmap:** Read-only optimized segments
+  </Accordion>
+
+  <Accordion title="Data Type Trade-offs">
+    - **Float32:** Default, no precision loss
+    - **Float16:** 50% memory savings, minimal quality impact for most models
+    - **Uint8:** 75% memory savings, use with quantization-aware models
+  </Accordion>
+</AccordionGroup>
+
+## Related Concepts
+
+<CardGroup cols={2}>
+  <Card title="Collections" href="/concepts/collections">
+    Learn how vectors are organized into collections
+  </Card>
+  <Card title="Points" href="/concepts/points">
+    Understand how vectors combine with payloads
+  </Card>
+  <Card title="Indexing" href="/concepts/indexing">
+    Explore how vectors are indexed for fast search
+  </Card>
+  <Card title="Search" href="/concepts/search">
+    Discover vector search algorithms
+  </Card>
+</CardGroup>

@@ -1,0 +1,335 @@
+---
+title: Snapshots
+description: Backup and restore Qdrant collections using snapshots
+---
+
+Snapshots allow you to create backups of your collections and restore them later. This is essential for disaster recovery, data migration, and testing.
+
+## Collection Snapshots
+
+Collection snapshots capture the entire state of a single collection, including vectors, payloads, and configuration.
+
+### Creating a Snapshot
+
+<Steps>
+  <Step title="Request snapshot creation">
+    ```bash
+    curl -X POST http://localhost:6333/collections/my_collection/snapshots
+    ```
+
+    **Response:**
+    ```json
+    {
+      "result": {
+        "name": "my_collection-2024-01-15-10-30-00.snapshot",
+        "creation_time": "2024-01-15T10:30:00Z",
+        "size": 158203840
+      },
+      "status": "ok",
+      "time": 2.453
+    }
+    ```
+  </Step>
+
+  <Step title="Wait for completion (optional)">
+    For large collections, use `wait=true` to wait for snapshot creation:
+    
+    ```bash
+    curl -X POST "http://localhost:6333/collections/my_collection/snapshots?wait=true"
+    ```
+  </Step>
+
+  <Step title="Verify snapshot created">
+    ```bash
+    curl http://localhost:6333/collections/my_collection/snapshots
+    ```
+  </Step>
+</Steps>
+
+### Listing Snapshots
+
+Get all snapshots for a collection:
+
+```bash
+curl http://localhost:6333/collections/my_collection/snapshots
+```
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "name": "my_collection-2024-01-15-10-30-00.snapshot",
+      "creation_time": "2024-01-15T10:30:00Z",
+      "size": 158203840
+    },
+    {
+      "name": "my_collection-2024-01-14-10-30-00.snapshot",
+      "creation_time": "2024-01-14T10:30:00Z",
+      "size": 152341760
+    }
+  ],
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+### Downloading a Snapshot
+
+Download snapshot file for external storage:
+
+```bash
+curl -O http://localhost:6333/collections/my_collection/snapshots/my_collection-2024-01-15-10-30-00.snapshot
+```
+
+This downloads the snapshot file to your current directory.
+
+### Restoring from Snapshot
+
+Restore a collection from a snapshot file:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/snapshots/recover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "location": "http://example.com/snapshots/my_collection.snapshot"
+  }'
+```
+
+Or from a local file URL:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/snapshots/recover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "location": "file:///var/snapshots/my_collection.snapshot"
+  }'
+```
+
+<Note>
+**Recovery Options:**
+- If collection exists, it will be deleted and recreated from snapshot
+- If collection doesn't exist, it will be created from snapshot
+- All existing data in the collection will be lost
+</Note>
+
+### Uploading a Snapshot
+
+Upload and restore from a snapshot file in one operation:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/snapshots/upload \
+  -F 'snapshot=@my_collection.snapshot'
+```
+
+With checksum verification:
+
+```bash
+curl -X POST "http://localhost:6333/collections/my_collection/snapshots/upload?checksum=abc123..." \
+  -F 'snapshot=@my_collection.snapshot'
+```
+
+### Deleting a Snapshot
+
+Remove a snapshot to free up disk space:
+
+```bash
+curl -X DELETE http://localhost:6333/collections/my_collection/snapshots/my_collection-2024-01-15-10-30-00.snapshot
+```
+
+## Full Storage Snapshots
+
+Full snapshots capture the entire Qdrant storage, including all collections and their configurations.
+
+### Creating a Full Snapshot
+
+```bash
+curl -X POST http://localhost:6333/snapshots
+```
+
+**Response:**
+```json
+{
+  "result": {
+    "name": "full-snapshot-2024-01-15-10-30-00.snapshot",
+    "creation_time": "2024-01-15T10:30:00Z",
+    "size": 1582038400
+  },
+  "status": "ok",
+  "time": 15.234
+}
+```
+
+### Listing Full Snapshots
+
+```bash
+curl http://localhost:6333/snapshots
+```
+
+### Downloading a Full Snapshot
+
+```bash
+curl -O http://localhost:6333/snapshots/full-snapshot-2024-01-15-10-30-00.snapshot
+```
+
+### Deleting a Full Snapshot
+
+```bash
+curl -X DELETE http://localhost:6333/snapshots/full-snapshot-2024-01-15-10-30-00.snapshot
+```
+
+## Snapshot Priority
+
+Control snapshot recovery priority:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/snapshots/recover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "location": "http://example.com/snapshots/my_collection.snapshot",
+    "priority": "snapshot"
+  }'
+```
+
+**Priority options:**
+- `replica` (default) - Prefer using existing replicas for recovery
+- `snapshot` - Always use snapshot even if replicas are available
+- `no_sync` - Don't sync with other replicas after recovery
+
+## Shard Snapshots
+
+For advanced use cases, you can create snapshots of individual shards:
+
+### Create Shard Snapshot
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/shards/0/snapshots
+```
+
+### List Shard Snapshots
+
+```bash
+curl http://localhost:6333/collections/my_collection/shards/0/snapshots
+```
+
+### Download Shard Snapshot
+
+```bash
+curl -O http://localhost:6333/collections/my_collection/shards/0/snapshots/shard-0-2024-01-15.snapshot
+```
+
+## Snapshot Storage Location
+
+By default, snapshots are stored in:
+- Collection snapshots: `{storage_dir}/snapshots/{collection_name}/`
+- Full snapshots: `{storage_dir}/snapshots/`
+
+You can configure a different location in the Qdrant config:
+
+```yaml
+storage:
+  snapshots_path: /var/lib/qdrant/snapshots
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Regular backup schedule">
+    Create snapshots on a regular schedule (daily, weekly) based on your data change rate.
+  </Step>
+
+  <Step title="Store snapshots externally">
+    Download snapshots and store them in external storage (S3, GCS, etc.) for disaster recovery.
+  </Step>
+
+  <Step title="Test recovery process">
+    Regularly test snapshot recovery to ensure backups are valid and the process works.
+  </Step>
+
+  <Step title="Clean up old snapshots">
+    Implement retention policies to delete old snapshots and free up disk space.
+  </Step>
+
+  <Step title="Verify checksums">
+    When transferring snapshots, always verify checksums to ensure data integrity.
+  </Step>
+
+  <Step title="Monitor snapshot size">
+    Keep track of snapshot sizes to ensure you have adequate storage space.
+  </Step>
+</Steps>
+
+## Performance Considerations
+
+<Note>
+**Snapshot Creation:**
+- Snapshot creation doesn't block read or write operations
+- Creation time depends on collection size
+- Expect ~1-5 minutes per GB (varies by disk speed)
+- Snapshots use copy-on-write when possible to minimize I/O
+</Note>
+
+<Note>
+**Snapshot Recovery:**
+- Recovery requires stopping and recreating the collection
+- All existing data is deleted
+- Recovery time is similar to initial data loading
+- Use `priority: replica` to recover from other nodes when available
+</Note>
+
+## Automation Example
+
+Automate daily snapshots with a cron job:
+
+```bash
+#!/bin/bash
+# Daily snapshot script
+
+COLLECTION="my_collection"
+DATE=$(date +%Y-%m-%d)
+BACKUP_DIR="/backups/qdrant"
+
+# Create snapshot
+SNAPSHOT=$(curl -X POST http://localhost:6333/collections/$COLLECTION/snapshots | jq -r '.result.name')
+
+# Download snapshot
+curl -o "$BACKUP_DIR/$COLLECTION-$DATE.snapshot" \
+  http://localhost:6333/collections/$COLLECTION/snapshots/$SNAPSHOT
+
+# Upload to S3 (optional)
+aws s3 cp "$BACKUP_DIR/$COLLECTION-$DATE.snapshot" \
+  s3://my-backups/qdrant/$COLLECTION/
+
+# Clean up local file
+rm "$BACKUP_DIR/$COLLECTION-$DATE.snapshot"
+
+# Delete old snapshots (keep last 7 days)
+find $BACKUP_DIR -name "$COLLECTION-*.snapshot" -mtime +7 -delete
+```
+
+## Troubleshooting
+
+<Warning>
+**Snapshot Creation Failed:**
+If snapshot creation fails:
+1. Check available disk space
+2. Verify write permissions in snapshot directory
+3. Check Qdrant logs for specific errors
+4. Ensure collection is not corrupted
+</Warning>
+
+<Warning>
+**Recovery Failed:**
+If snapshot recovery fails:
+1. Verify snapshot file is not corrupted (check checksum)
+2. Ensure snapshot is from compatible Qdrant version
+3. Check available disk space and memory
+4. Review error message in response
+5. Check if collection configuration is valid
+</Warning>
+
+## Next Steps
+
+- Learn about [quantization](/guides/quantization) to reduce snapshot sizes
+- Explore cluster configuration for automatic replication
+- Set up monitoring for snapshot operations

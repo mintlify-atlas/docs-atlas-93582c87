@@ -1,0 +1,352 @@
+---
+title: Searching
+description: Perform vector similarity search with Qdrant
+---
+
+Qdrant provides powerful search capabilities to find the most similar vectors in your collection. This guide covers different search methods and optimization techniques.
+
+## Basic Vector Search
+
+Find points similar to a query vector:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 3
+  }'
+```
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "id": 3,
+      "version": 0,
+      "score": 0.987,
+      "payload": {"city": "Berlin"},
+      "vector": null
+    },
+    {
+      "id": 1,
+      "version": 0,
+      "score": 0.856,
+      "payload": {"city": "London"},
+      "vector": null
+    },
+    {
+      "id": 2,
+      "version": 0,
+      "score": 0.723,
+      "payload": {"city": "Moscow"},
+      "vector": null
+    }
+  ],
+  "status": "ok",
+  "time": 0.003
+}
+```
+
+## Search with Named Vectors
+
+For collections with multiple vector types, specify which vector to search:
+
+```bash
+curl -X POST http://localhost:6333/collections/multimodal/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": {
+      "name": "text",
+      "vector": [0.2, 0.1, 0.9, 0.7]
+    },
+    "limit": 5
+  }'
+```
+
+## Retrieving Vectors and Payload
+
+By default, search returns only IDs and scores. Control what's returned:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 3,
+    "with_payload": true,
+    "with_vector": true
+  }'
+```
+
+**Selective payload fields:**
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 3,
+    "with_payload": ["city", "price"]
+  }'
+```
+
+## Search Parameters
+
+Fine-tune search quality and performance with HNSW parameters:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 10,
+    "params": {
+      "hnsw_ef": 128,
+      "exact": false
+    }
+  }'
+```
+
+**Parameters:**
+- `hnsw_ef` - Size of the dynamic candidate list (default: based on collection config). Higher = better accuracy, slower search
+- `exact` - If true, performs exact search (ignores HNSW index). Use for high-precision requirements
+
+<Note>
+**EF Parameter Guidelines:**
+- Minimum recommended: same as `limit`
+- For high recall: 64-128
+- For maximum recall: 256-512
+- Increasing `hnsw_ef` has diminishing returns after 2x your limit
+</Note>
+
+## Score Threshold
+
+Filter results by minimum similarity score:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 10,
+    "score_threshold": 0.8
+  }'
+```
+
+This returns only results with a score >= 0.8.
+
+## Batch Search
+
+Perform multiple searches in a single request for better performance:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search/batch \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "searches": [
+      {
+        "vector": [0.2, 0.1, 0.9, 0.7],
+        "limit": 3
+      },
+      {
+        "vector": [0.5, 0.3, 0.2, 0.1],
+        "limit": 3,
+        "filter": {
+          "must": [
+            {"key": "city", "match": {"value": "London"}}
+          ]
+        }
+      }
+    ]
+  }'
+```
+
+**Response:**
+```json
+{
+  "result": [
+    [
+      {"id": 3, "score": 0.987, "payload": {...}},
+      {"id": 1, "score": 0.856, "payload": {...}},
+      {"id": 2, "score": 0.723, "payload": {...}}
+    ],
+    [
+      {"id": 7, "score": 0.912, "payload": {...}},
+      {"id": 5, "score": 0.834, "payload": {...}}
+    ]
+  ],
+  "status": "ok",
+  "time": 0.004
+}
+```
+
+## Offset and Pagination
+
+Skip the first N results:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 10,
+    "offset": 10
+  }'
+```
+
+<Warning>
+**Pagination Note:**
+Offset-based pagination can be inefficient for large offsets. For deep pagination, consider using scroll API or id-based pagination instead.
+</Warning>
+
+## Search with Filters
+
+Combine vector similarity with payload filtering:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 10,
+    "filter": {
+      "must": [
+        {
+          "key": "city",
+          "match": {
+            "value": "London"
+          }
+        }
+      ]
+    }
+  }'
+```
+
+See the [Filtering Guide](/guides/filtering-data) for more filter examples.
+
+## Grouping Search Results
+
+Group results by a payload field (e.g., deduplicate by category):
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search/groups \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "group_by": "city",
+    "limit": 3,
+    "group_size": 2
+  }'
+```
+
+This returns up to 3 groups, with up to 2 results per group.
+
+## Recommendations
+
+Find similar items based on positive and negative examples:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/recommend \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "positive": [1, 2],
+    "negative": [3],
+    "limit": 5
+  }'
+```
+
+Qdrant computes a query vector by averaging positive examples and subtracting negative examples.
+
+## Discovery Search
+
+Find vectors in a specific region of the vector space:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/discover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "target": 1,
+    "context": [
+      {
+        "positive": 2,
+        "negative": 3
+      }
+    ],
+    "limit": 5
+  }'
+```
+
+## Consistency Control
+
+For distributed setups, control read consistency:
+
+```bash
+curl -X POST "http://localhost:6333/collections/my_collection/points/search?consistency=all" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 3
+  }'
+```
+
+Options:
+- `majority` - Read from majority of replicas (default)
+- `quorum` - Same as majority
+- `all` - Read from all replicas (strongest consistency)
+- `1`, `2`, etc. - Read from N replicas
+
+## Performance Optimization
+
+<Steps>
+  <Step title="Tune HNSW parameters">
+    - Start with `hnsw_ef` = 64 for most use cases
+    - Increase to 128-256 if you need higher recall
+    - Use `exact=true` only when you need perfect recall
+  </Step>
+
+  <Step title="Use appropriate limits">
+    - Request only the number of results you need
+    - Smaller limits = faster searches
+  </Step>
+
+  <Step title="Optimize payload retrieval">
+    - Set `with_payload` to false if you don't need payload
+    - Use selective payload fields instead of full payload
+    - Never set `with_vector=true` unless necessary
+  </Step>
+
+  <Step title="Use batch search">
+    When performing multiple searches, always use the batch endpoint for better throughput.
+  </Step>
+
+  <Step title="Enable quantization">
+    For large collections, [enable quantization](/guides/quantization) to reduce memory usage and increase search speed.
+  </Step>
+</Steps>
+
+## Common Issues
+
+<Warning>
+**Low Recall:**
+If search results seem inaccurate:
+1. Increase `hnsw_ef` parameter
+2. Verify vectors are normalized (for Cosine distance)
+3. Check if collection has enough points indexed
+4. Consider using `exact: true` to verify issue is with HNSW
+</Warning>
+
+<Warning>
+**Slow Search:**
+If searches are too slow:
+1. Reduce `hnsw_ef` if possible
+2. Enable quantization to reduce vector comparison time
+3. Consider increasing `full_scan_threshold` in collection config
+4. Check system resources (CPU, memory)
+</Warning>
+
+## Next Steps
+
+- Learn about [filtering data](/guides/filtering-data) to refine search results
+- Set up [payload indexing](/guides/payload-indexing) for faster filtered searches
+- Explore [hybrid search](/guides/hybrid-search) combining dense and sparse vectors

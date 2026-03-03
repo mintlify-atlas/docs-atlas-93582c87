@@ -1,0 +1,344 @@
+---
+title: Uploading Data
+description: Learn how to insert, update, and manage vectors in Qdrant collections
+---
+
+Once you've created a collection, you can start uploading vectors and their associated payloads. Qdrant provides several endpoints for different data operations.
+
+## Upserting Points
+
+The upsert operation inserts new points or updates existing ones. This is the most common way to add data.
+
+<Steps>
+  <Step title="Prepare your data">
+    Each point requires:
+    - `id` - Unique identifier (integer or UUID)
+    - `vector` - The embedding vector
+    - `payload` - Optional metadata (JSON object)
+  </Step>
+
+  <Step title="Upsert single point">
+    ```bash
+    curl -X PUT http://localhost:6333/collections/my_collection/points \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "points": [
+          {
+            "id": 1,
+            "vector": [0.05, 0.61, 0.76, 0.74],
+            "payload": {
+              "city": "Berlin",
+              "price": 1.99
+            }
+          }
+        ]
+      }'
+    ```
+
+    **Response:**
+    ```json
+    {
+      "result": {
+        "operation_id": 0,
+        "status": "completed"
+      },
+      "status": "ok",
+      "time": 0.002
+    }
+    ```
+  </Step>
+
+  <Step title="Verify the upload">
+    Retrieve the point to confirm:
+    ```bash
+    curl -X POST http://localhost:6333/collections/my_collection/points \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "ids": [1]
+      }'
+    ```
+  </Step>
+</Steps>
+
+## Batch Upload
+
+For uploading multiple points efficiently, use batch operations:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/points \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [
+      {
+        "id": 1,
+        "vector": [0.05, 0.61, 0.76, 0.74],
+        "payload": {"city": "Berlin"}
+      },
+      {
+        "id": 2,
+        "vector": [0.19, 0.81, 0.75, 0.11],
+        "payload": {"city": "London"}
+      },
+      {
+        "id": 3,
+        "vector": [0.36, 0.55, 0.47, 0.94],
+        "payload": {"city": "Moscow"}
+      }
+    ]
+  }'
+```
+
+<Note>
+**Batch Size Recommendations:**
+- Optimal batch size: 100-1000 points
+- For large datasets, split into multiple batches
+- Use parallel requests for faster uploads (but watch your system resources)
+</Note>
+
+## Named Vectors
+
+When using collections with named vectors, specify the vector name:
+
+```bash
+curl -X PUT http://localhost:6333/collections/multimodal/points \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [
+      {
+        "id": 1,
+        "vector": {
+          "text": [0.05, 0.61, 0.76, 0.74],
+          "image": [0.19, 0.81, 0.75, 0.11]
+        },
+        "payload": {"description": "Product image"}
+      }
+    ]
+  }'
+```
+
+## Updating Vectors Only
+
+Update just the vectors without changing payload:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/points/vectors \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [
+      {
+        "id": 1,
+        "vector": [0.1, 0.2, 0.3, 0.4]
+      }
+    ]
+  }'
+```
+
+For named vectors:
+
+```bash
+curl -X PUT http://localhost:6333/collections/multimodal/points/vectors \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [
+      {
+        "id": 1,
+        "vector": {
+          "text": [0.1, 0.2, 0.3, 0.4]
+        }
+      }
+    ]
+  }'
+```
+
+## Managing Payloads
+
+### Set Payload (Merge)
+
+Add or update specific payload fields without affecting others:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/payload \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "payload": {
+      "property": "value",
+      "rating": 4.5
+    },
+    "points": [1, 2, 3]
+  }'
+```
+
+### Overwrite Payload
+
+Replace the entire payload:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/points/payload \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "payload": {
+      "city": "Paris"
+    },
+    "points": [1]
+  }'
+```
+
+### Delete Payload Fields
+
+Remove specific fields from the payload:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/payload/delete \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "keys": ["city", "rating"],
+    "points": [1, 2]
+  }'
+```
+
+### Clear All Payload
+
+Remove entire payload from points:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/payload/clear \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [1, 2, 3]
+  }'
+```
+
+## Deleting Points
+
+### Delete by IDs
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/delete \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [1, 2, 3]
+  }'
+```
+
+### Delete by Filter
+
+Remove all points matching a filter:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/delete \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "filter": {
+      "must": [
+        {
+          "key": "city",
+          "match": {
+            "value": "Berlin"
+          }
+        }
+      ]
+    }
+  }'
+```
+
+## Batch Operations
+
+Execute multiple operations in a single request:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/batch \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "operations": [
+      {
+        "upsert": {
+          "points": [
+            {
+              "id": 1,
+              "vector": [0.1, 0.2, 0.3, 0.4],
+              "payload": {"city": "Berlin"}
+            }
+          ]
+        }
+      },
+      {
+        "set_payload": {
+          "payload": {"price": 2.99},
+          "points": [2, 3]
+        }
+      },
+      {
+        "delete": {
+          "points": [4, 5]
+        }
+      }
+    ]
+  }'
+```
+
+**Response:**
+```json
+{
+  "result": [
+    {"operation_id": 0, "status": "completed"},
+    {"operation_id": 1, "status": "completed"},
+    {"operation_id": 2, "status": "completed"}
+  ],
+  "status": "ok",
+  "time": 0.003
+}
+```
+
+## Wait Parameters
+
+Control write consistency with the `wait` parameter:
+
+```bash
+# Wait for operation to complete
+curl -X PUT "http://localhost:6333/collections/my_collection/points?wait=true" \
+  -H 'Content-Type: application/json' \
+  -d '{...}'
+
+# Return immediately (async)
+curl -X PUT "http://localhost:6333/collections/my_collection/points?wait=false" \
+  -H 'Content-Type: application/json' \
+  -d '{...}'
+```
+
+## Ordering Parameter
+
+Specify write ordering guarantees:
+
+- `weak` - Write to any replica (fastest, least consistent)
+- `medium` - Write confirmed by majority (default)
+- `strong` - Write confirmed by all replicas (slowest, most consistent)
+
+```bash
+curl -X PUT "http://localhost:6333/collections/my_collection/points?ordering=strong" \
+  -H 'Content-Type: application/json' \
+  -d '{...}'
+```
+
+## Performance Tips
+
+<Note>
+**Optimization Strategies:**
+- Use batch upserts for bulk uploads (100-1000 points per batch)
+- For large datasets (millions of points), use multiple parallel requests
+- Disable indexing during initial bulk upload, then rebuild indexes
+- Use `wait=false` for asynchronous writes when immediate consistency isn't needed
+- Monitor system memory and adjust batch sizes accordingly
+</Note>
+
+<Warning>
+**ID Constraints:**
+- IDs must be unique within a collection
+- Supported types: unsigned integers (0 to 2^64-1) or UUIDs
+- Upserting with an existing ID overwrites the point completely
+</Warning>
+
+## Next Steps
+
+- Learn how to [search your data](/guides/searching)
+- Set up [filtering](/guides/filtering-data) for refined queries
+- Create [payload indexes](/guides/payload-indexing) for faster filtering

@@ -1,0 +1,724 @@
+---
+title: Filtering
+description: Payload filtering capabilities and conditions in Qdrant
+---
+
+Filtering allows you to narrow down search results based on payload metadata. Qdrant supports rich filtering with complex boolean logic.
+
+## Filter Structure
+
+```rust
+pub struct Filter {
+    pub should: Option<Vec<Condition>>,      // OR logic
+    pub min_should: Option<MinShould>,       // At least N conditions
+    pub must: Option<Vec<Condition>>,        // AND logic
+    pub must_not: Option<Vec<Condition>>,    // NOT logic
+}
+```
+
+**Source:** `lib/segment/src/types.rs:3707-3739`
+
+<Tabs>
+  <Tab title="Must (AND)">
+    All conditions must match:
+
+    ```json
+    {
+      "filter": {
+        "must": [
+          {"key": "city", "match": {"value": "London"}},
+          {"key": "price", "range": {"gte": 100}}
+        ]
+      }
+    }
+    ```
+
+    Returns points where `city = "London" AND price >= 100`
+  </Tab>
+
+  <Tab title="Should (OR)">
+    At least one condition must match:
+
+    ```json
+    {
+      "filter": {
+        "should": [
+          {"key": "city", "match": {"value": "London"}},
+          {"key": "city", "match": {"value": "Paris"}}
+        ]
+      }
+    }
+    ```
+
+    Returns points where `city = "London" OR city = "Paris"`
+  </Tab>
+
+  <Tab title="Must Not (NOT)">
+    All conditions must NOT match:
+
+    ```json
+    {
+      "filter": {
+        "must_not": [
+          {"key": "status", "match": {"value": "deleted"}}
+        ]
+      }
+    }
+    ```
+
+    Returns points where `status != "deleted"`
+  </Tab>
+
+  <Tab title="Min Should">
+    At least N conditions must match:
+
+    ```json
+    {
+      "filter": {
+        "min_should": {
+          "conditions": [
+            {"key": "tag", "match": {"value": "premium"}},
+            {"key": "verified", "match": {"value": true}},
+            {"key": "featured", "match": {"value": true}}
+          ],
+          "min_count": 2
+        }
+      }
+    }
+    ```
+
+    Returns points matching at least 2 of 3 conditions.
+
+    **Source:** `lib/segment/src/types.rs:3697-3701`
+  </Tab>
+</Tabs>
+
+## Condition Types
+
+```rust
+pub enum Condition {
+    Field(FieldCondition),           // Field-based matching
+    IsEmpty(IsEmptyCondition),       // Empty array or missing field
+    IsNull(IsNullCondition),         // NULL value check
+    HasId(HasIdCondition),           // Point ID matching
+    HasVector(HasVectorCondition),   // Vector existence check
+    Nested(NestedCondition),         // Nested object filtering
+    Filter(Filter),                  // Nested filter
+}
+```
+
+**Source:** `lib/segment/src/types.rs:3285-3303`
+
+## Field Conditions
+
+Field conditions are the most common filter type.
+
+### Match Conditions
+
+<Tabs>
+  <Tab title="Exact Match">
+    ```json
+    {
+      "key": "city",
+      "match": {
+        "value": "London"
+      }
+    }
+    ```
+
+    Supports: strings, integers, booleans
+
+    **Source:** `lib/segment/src/types.rs:2416-2418`
+  </Tab>
+
+  <Tab title="Match Any">
+    ```json
+    {
+      "key": "color",
+      "match": {
+        "any": ["red", "blue", "green"]
+      }
+    }
+    ```
+
+    Point matches if field equals any value in the list.
+
+    **Source:** `lib/segment/src/types.rs:2458-2460`
+  </Tab>
+
+  <Tab title="Match Except">
+    ```json
+    {
+      "key": "status",
+      "match": {
+        "except": ["deleted", "banned"]
+      }
+    }
+    ```
+
+    Point matches if field does NOT equal any value.
+
+    **Source:** `lib/segment/src/types.rs:2465-2467`
+  </Tab>
+
+  <Tab title="Text Match">
+    ```json
+    {
+      "key": "description",
+      "match": {
+        "text": "machine learning"
+      }
+    }
+    ```
+
+    Full-text search with tokenization.
+
+    **Source:** `lib/segment/src/types.rs:2423-2425`
+  </Tab>
+
+  <Tab title="Phrase Match">
+    ```json
+    {
+      "key": "description",
+      "match": {
+        "phrase": "natural language processing"
+      }
+    }
+    ```
+
+    Matches exact phrase (requires phrase_matching index).
+
+    **Source:** `lib/segment/src/types.rs:2443-2445`
+  </Tab>
+</Tabs>
+
+### Range Conditions
+
+```json
+{
+  "key": "price",
+  "range": {
+    "gte": 100,   // Greater than or equal
+    "lte": 500    // Less than or equal
+  }
+}
+```
+
+Available operators:
+- `gt`: Greater than
+- `gte`: Greater than or equal
+- `lt`: Less than
+- `lte`: Less than or equal
+
+Supported types: integers, floats, datetimes
+
+### Geo Conditions
+
+<Tabs>
+  <Tab title="Geo Radius">
+    ```json
+    {
+      "key": "location",
+      "geo_radius": {
+        "center": {
+          "lat": 51.5074,
+          "lon": -0.1278
+        },
+        "radius": 5000  // meters
+      }
+    }
+    ```
+
+    Finds points within radius of center.
+  </Tab>
+
+  <Tab title="Geo Bounding Box">
+    ```json
+    {
+      "key": "location",
+      "geo_bounding_box": {
+        "top_left": {
+          "lat": 51.6,
+          "lon": -0.2
+        },
+        "bottom_right": {
+          "lat": 51.4,
+          "lon": 0.0
+        }
+      }
+    }
+    ```
+
+    Finds points within rectangular area.
+  </Tab>
+
+  <Tab title="Geo Polygon">
+    ```json
+    {
+      "key": "location",
+      "geo_polygon": {
+        "exterior": [
+          {"lat": 51.5, "lon": -0.2},
+          {"lat": 51.6, "lon": -0.1},
+          {"lat": 51.5, "lon": 0.0},
+          {"lat": 51.4, "lon": -0.1}
+        ]
+      }
+    }
+    ```
+
+    Finds points within polygon boundary.
+  </Tab>
+</Tabs>
+
+**GeoPoint validation:** lat ∈ [-90, 90], lon ∈ [-180, 180]
+
+**Source:** `lib/segment/src/types.rs:1798-1808`
+
+### Datetime Range
+
+```json
+{
+  "key": "created_at",
+  "range": {
+    "gte": "2024-01-01T00:00:00Z",
+    "lte": "2024-12-31T23:59:59Z"
+  }
+}
+```
+
+Datetimes are RFC3339 formatted strings.
+
+**Source:** `lib/segment/src/types.rs:84-104`
+
+### Values Count
+
+```json
+{
+  "key": "tags",
+  "values_count": {
+    "gte": 2,
+    "lte": 5
+  }
+}
+```
+
+Filter by the number of values in an array field.
+
+## Special Conditions
+
+### Is Empty
+
+```json
+{
+  "is_empty": {
+    "key": "tags"
+  }
+}
+```
+
+Matches if field is an empty array or doesn't exist.
+
+### Is Null
+
+```json
+{
+  "is_null": {
+    "key": "optional_field"
+  }
+}
+```
+
+Matches if field value is explicitly `null`.
+
+### Has ID
+
+```json
+{
+  "has_id": [1, 2, 3, 42]
+}
+```
+
+Filter by point IDs (numeric or UUID).
+
+**Source:** Inferred from `lib/segment/src/types.rs:3293`
+
+### Has Vector
+
+```json
+{
+  "has_vector": "text"  // Named vector
+}
+```
+
+or
+
+```json
+{
+  "has_vector": ""  // Default vector
+}
+```
+
+Matches points that have a specific vector assigned.
+
+## Nested Conditions
+
+```json
+{
+  "nested": {
+    "key": "metadata",
+    "filter": {
+      "must": [
+        {"key": "author", "match": {"value": "John"}},
+        {"key": "verified", "match": {"value": true}}
+      ]
+    }
+  }
+}
+```
+
+**Source:** `lib/segment/src/types.rs:3297`
+
+Apply filters to nested objects. All conditions must match within the same nested object.
+
+## Combined Filter Example
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "city",
+        "match": {"value": "London"}
+      },
+      {
+        "key": "price",
+        "range": {"gte": 100, "lte": 500}
+      }
+    ],
+    "should": [
+      {
+        "key": "category",
+        "match": {"value": "premium"}
+      },
+      {
+        "key": "featured",
+        "match": {"value": true}
+      }
+    ],
+    "must_not": [
+      {
+        "key": "status",
+        "match": {"value": "deleted"}
+      }
+    ]
+  }
+}
+```
+
+Logic: `(city = London AND price ∈ [100, 500]) AND (category = premium OR featured = true) AND (status != deleted)`
+
+## Payload Indexing
+
+For efficient filtering, create indexes on frequently filtered fields:
+
+```json
+{
+  "field_name": "city",
+  "field_schema": "keyword"
+}
+```
+
+Supported index types:
+
+<Tabs>
+  <Tab title="Keyword">
+    Exact string matching:
+
+    ```json
+    {"field_schema": "keyword"}
+    ```
+
+    - Fast exact match and match_any
+    - Case-sensitive
+    - Use for: categories, IDs, tags
+  </Tab>
+
+  <Tab title="Integer">
+    Integer values with range support:
+
+    ```json
+    {
+      "field_schema": {
+        "type": "integer",
+        "range": true,
+        "lookup": true
+      }
+    }
+    ```
+
+    **Source:** `lib/segment/src/types.rs:2202-2210`
+
+    - `range`: Enable range queries
+    - `lookup`: Enable exact match
+  </Tab>
+
+  <Tab title="Float">
+    Floating-point numbers:
+
+    ```json
+    {"field_schema": "float"}
+    ```
+
+    Supports range queries only.
+  </Tab>
+
+  <Tab title="Geo">
+    Geographic coordinates:
+
+    ```json
+    {"field_schema": "geo"}
+    ```
+
+    Enables geo_radius, geo_bounding_box, geo_polygon.
+  </Tab>
+
+  <Tab title="Text">
+    Full-text search:
+
+    ```json
+    {
+      "field_schema": {
+        "type": "text",
+        "phrase_matching": true
+      }
+    }
+    ```
+
+    **Source:** `lib/segment/src/types.rs:2211-2217`
+
+    - Tokenization and stemming
+    - `phrase_matching`: Enable phrase queries
+  </Tab>
+
+  <Tab title="Datetime">
+    RFC3339 timestamps:
+
+    ```json
+    {"field_schema": "datetime"}
+    ```
+
+    Supports range queries with datetime strings.
+  </Tab>
+
+  <Tab title="Bool">
+    Boolean values:
+
+    ```json
+    {"field_schema": "bool"}
+    ```
+
+    Fast exact matching for true/false.
+  </Tab>
+
+  <Tab title="UUID">
+    UUID identifiers:
+
+    ```json
+    {"field_schema": "uuid"}
+    ```
+
+    Optimized UUID storage and matching.
+  </Tab>
+</Tabs>
+
+## Filter Performance
+
+### Cardinality Estimation
+
+Qdrant estimates how many points match a filter:
+
+```rust
+pub struct CardinalityEstimation {
+    pub primary_clauses: Vec<CardinalityEstimation>,
+    pub min: usize,
+    pub exp: usize,
+    pub max: usize,
+}
+```
+
+**Source:** `lib/segment/src/index/field_index/mod.rs`
+
+- **Low cardinality:** Pre-filter points, then search
+- **High cardinality:** Search first, post-filter results
+
+### Indexed vs. Unindexed
+
+<Tabs>
+  <Tab title="Indexed Fields">
+    ✅ Fast cardinality estimation
+    ✅ Optimized condition checking
+    ✅ Efficient for low selectivity
+
+    ```json
+    {"key": "city", "match": {"value": "London"}}
+    ```
+  </Tab>
+
+  <Tab title="Unindexed Fields">
+    ⚠️ Full payload scan
+    ⚠️ Slower on large collections
+    ⚠️ Can be disabled in strict mode
+
+    ```json
+    {"key": "unindexed_field", "match": {"value": "test"}}
+    ```
+  </Tab>
+</Tabs>
+
+### Strict Mode Limits
+
+```rust
+pub struct StrictModeConfig {
+    pub unindexed_filtering_retrieve: Option<bool>,
+    pub unindexed_filtering_update: Option<bool>,
+    pub filter_max_conditions: Option<usize>,
+    pub condition_max_size: Option<usize>,
+}
+```
+
+**Source:** `lib/segment/src/types.rs:1047-1100`
+
+```json
+{
+  "strict_mode": {
+    "unindexed_filtering_retrieve": false,  // Block unindexed in search
+    "filter_max_conditions": 100,           // Max total conditions
+    "condition_max_size": 10000             // Max items in match_any
+  }
+}
+```
+
+## Filter Examples
+
+<CodeGroup>
+  ```json E-commerce
+  {
+    "filter": {
+      "must": [
+        {"key": "category", "match": {"value": "electronics"}},
+        {"key": "price", "range": {"lte": 1000}},
+        {"key": "in_stock", "match": {"value": true}}
+      ],
+      "should": [
+        {"key": "brand", "match": {"any": ["Apple", "Samsung"]}},
+        {"key": "rating", "range": {"gte": 4.5}}
+      ]
+    }
+  }
+  ```
+
+  ```json Location-based
+  {
+    "filter": {
+      "must": [
+        {
+          "key": "location",
+          "geo_radius": {
+            "center": {"lat": 51.5074, "lon": -0.1278},
+            "radius": 2000
+          }
+        },
+        {"key": "open_now", "match": {"value": true}}
+      ]
+    }
+  }
+  ```
+
+  ```json Time-range
+  {
+    "filter": {
+      "must": [
+        {
+          "key": "created_at",
+          "range": {
+            "gte": "2024-01-01T00:00:00Z",
+            "lte": "2024-12-31T23:59:59Z"
+          }
+        },
+        {"key": "status", "match": {"value": "published"}}
+      ]
+    }
+  }
+  ```
+
+  ```json Complex Nested
+  {
+    "filter": {
+      "must": [
+        {
+          "nested": {
+            "key": "author",
+            "filter": {
+              "must": [
+                {"key": "verified", "match": {"value": true}},
+                {"key": "followers", "range": {"gte": 1000}}
+              ]
+            }
+          }
+        },
+        {"key": "tags", "values_count": {"gte": 3}}
+      ]
+    }
+  }
+  ```
+</CodeGroup>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Index Strategy">
+    - Index all frequently filtered fields
+    - Use appropriate schema types (keyword vs. text)
+    - Enable `range: true` for integer fields used in ranges
+    - Consider `on_disk: true` for large indexes
+  </Accordion>
+
+  <Accordion title="Query Optimization">
+    - Put most selective conditions in `must` first
+    - Use `match_any` instead of multiple `should` conditions
+    - Avoid very large `match_any` arrays (> 1000 items)
+    - Prefer indexed fields over unindexed
+  </Accordion>
+
+  <Accordion title="Filter Design">
+    - Keep filter depth reasonable (< 5 levels)
+    - Limit total conditions (< 100)
+    - Use nested filters for related conditions
+    - Consider cardinality when combining filters
+  </Accordion>
+
+  <Accordion title="Performance">
+    - Monitor filter cardinality estimation
+    - Use strict mode to prevent expensive queries
+    - Batch similar filtered searches
+    - Consider ACORN for complex multi-filter queries
+  </Accordion>
+</AccordionGroup>
+
+## Related Concepts
+
+<CardGroup cols={2}>
+  <Card title="Search" href="/concepts/search">
+    Combining filters with vector search
+  </Card>
+  <Card title="Points" href="/concepts/points">
+    Payload structure and types
+  </Card>
+  <Card title="Collections" href="/concepts/collections">
+    Payload index configuration
+  </Card>
+  <Card title="Indexing" href="/concepts/indexing">
+    Payload index internals
+  </Card>
+</CardGroup>

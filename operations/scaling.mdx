@@ -1,0 +1,591 @@
+---
+title: Scaling
+description: Horizontal and vertical scaling strategies for Qdrant
+---
+
+## Overview
+
+Qdrant supports both vertical scaling (increasing resources on existing nodes) and horizontal scaling (adding more nodes to a cluster). Understanding when and how to scale ensures optimal performance and reliability.
+
+## Vertical Scaling
+
+Vertical scaling involves increasing the resources (CPU, RAM, disk) of your Qdrant instance.
+
+### When to Scale Vertically
+
+- Single collection with growing data volume
+- Need faster query performance
+- Memory usage approaching system limits
+- I/O bottlenecks on disk operations
+
+### CPU Scaling
+
+Qdrant utilizes multiple CPU cores for:
+- Parallel search across segments
+- Index building and optimization
+- Request handling
+
+**Configuration:**
+
+```yaml
+# config/config.yaml
+storage:
+  performance:
+    # Search threads (0 = auto, uses all available cores)
+    max_search_threads: 0
+    
+  # HNSW index building threads
+  hnsw_index:
+    max_indexing_threads: 0  # 0 = auto (8-16 recommended)
+    
+  optimizers:
+    # Optimization job threads (null = dynamic)
+    max_optimization_threads: null
+    
+service:
+  # API worker threads (0 = number of CPUs)
+  max_workers: 0
+```
+
+<Tip>
+For HNSW indexing, keep `max_indexing_threads` between 8-16 to prevent building inefficient graphs. More threads don't always improve quality.
+</Tip>
+
+### Memory Scaling
+
+Memory requirements depend on:
+- Number of vectors
+- Vector dimensionality
+- Number of indexed payloads
+- HNSW index parameters
+
+**Memory optimization:**
+
+```yaml
+storage:
+  # Store payload on disk
+  on_disk_payload: true
+  
+  # HNSW index on disk (reduces RAM usage)
+  hnsw_index:
+    on_disk: true
+```
+
+**Collection-level settings:**
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine",
+      "on_disk": true  # Store vectors on disk
+    },
+    "optimizers_config": {
+      "memmap_threshold": 20000  # Use mmap for large segments
+    }
+  }'
+```
+
+### Disk Scaling
+
+Disk performance impacts:
+- Snapshot creation speed
+- Recovery time
+- On-disk index performance
+
+**Recommendations:**
+- **NVMe SSDs** for production workloads
+- **Separate disks** for WAL and storage
+- **Fast temp storage** for snapshots
+
+```yaml
+storage:
+  storage_path: /mnt/nvme/qdrant/storage
+  snapshots_path: /mnt/backup/qdrant/snapshots
+  temp_path: /mnt/nvme/qdrant/temp
+```
+
+## Horizontal Scaling
+
+Horizontal scaling distributes data and load across multiple nodes in a cluster.
+
+### Cluster Architecture
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Node 1    │     │   Node 2    │     │   Node 3    │
+│             │     │             │     │             │
+│ Shard 0 (P) │────▶│ Shard 0 (R) │     │ Shard 1 (P) │
+│ Shard 1 (R) │     │ Shard 2 (P) │────▶│ Shard 2 (R) │
+│             │     │             │     │ Shard 0 (R) │
+└─────────────┘     └─────────────┘     └─────────────┘
+       │                   │                   │
+       └───────────────────┴───────────────────┘
+                  Consensus (Raft)
+
+P = Primary Replica
+R = Replica
+```
+
+### Setting Up a Cluster
+
+#### Node 1 (Bootstrap)
+
+```bash
+./qdrant --bootstrap
+```
+
+Configuration:
+```yaml
+# config/config.yaml
+cluster:
+  enabled: true
+  p2p:
+    port: 6335
+```
+
+#### Node 2 & 3 (Join)
+
+```bash
+./qdrant --uri http://node1:6335
+```
+
+### Sharding Strategy
+
+#### Automatic Sharding
+
+Qdrant automatically distributes shards across nodes:
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "shard_number": 6,           # Total shards
+    "replication_factor": 2      # Replicas per shard
+  }'
+```
+
+**Shard distribution with 3 nodes:**
+- Node 1: Shards 0(P), 1(R), 2(P)
+- Node 2: Shards 0(R), 3(P), 4(P) 
+- Node 3: Shards 1(P), 3(R), 5(P)
+
+P = Primary, R = Replica
+
+#### Custom Sharding
+
+Partition data by custom keys:
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {"size": 384, "distance": "Cosine"},
+    "sharding_method": "custom",
+    "replication_factor": 2
+  }'
+
+# Create shard key
+curl -X PUT http://localhost:6333/collections/{collection_name}/shards \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "shard_key": "user_123",
+    "shards_number": 2,
+    "replication_factor": 2
+  }'
+```
+
+**Insert with shard key:**
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name}/points \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [
+      {
+        "id": 1,
+        "vector": [0.1, 0.2, ...],
+        "payload": {"user_id": "user_123"}
+      }
+    ],
+    "shard_key": "user_123"
+  }'
+```
+
+### Replication
+
+Replication provides:
+- **High availability** - Cluster survives node failures
+- **Read scalability** - Distribute queries across replicas
+- **Data durability** - Multiple copies of data
+
+#### Replication Factor
+
+```bash
+# Collection with 2 replicas per shard
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {"size": 384, "distance": "Cosine"},
+    "shard_number": 3,
+    "replication_factor": 2,
+    "write_consistency_factor": 1  # Writes succeed after 1 replica confirms
+  }'
+```
+
+#### Write Consistency
+
+- `write_consistency_factor: 1` - Fast writes, eventual consistency
+- `write_consistency_factor: 2` - Slower writes, strong consistency
+- `write_consistency_factor: N` - All replicas must confirm (N = replication_factor)
+
+#### Read Fan-out
+
+Query multiple replicas simultaneously to reduce latency spikes:
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {"size": 384, "distance": "Cosine"},
+    "replication_factor": 3,
+    "read_fan_out_factor": 1,      # Query 1 additional replica
+    "read_fan_out_delay_ms": 50    # Wait 50ms before fan-out
+  }'
+```
+
+### Resharding
+
+Change the number of shards in an existing collection:
+
+```bash
+curl -X POST http://localhost:6333/collections/{collection_name}/cluster \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "start_resharding": {
+      "direction": "up",
+      "shard_number": 6  # Scale from 3 to 6 shards
+    }
+  }'
+```
+
+<Warning>
+Resharding is a resource-intensive operation. Plan for:
+- Increased network traffic
+- Higher CPU and memory usage
+- Temporary performance impact
+
+Enable resharding in cluster config:
+```yaml
+cluster:
+  resharding_enabled: true
+```
+</Warning>
+
+**Monitor resharding progress:**
+```bash
+curl http://localhost:6333/collections/{collection_name}/cluster
+```
+
+## Shard Transfers
+
+Manually move shards between nodes for rebalancing:
+
+```bash
+curl -X POST http://localhost:6333/collections/{collection_name}/cluster \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "move_shard": {
+      "shard_id": 0,
+      "from_peer_id": 1,
+      "to_peer_id": 2,
+      "method": "stream_records"  # or "snapshot" or "wal_delta"
+    }
+  }'
+```
+
+### Transfer Methods
+
+<Tabs>
+  <Tab title="stream_records">
+    **Best for:** Small to medium shards, live migrations
+    
+    - Streams points one by one
+    - Minimal disk I/O
+    - Lower memory usage
+    - Slower for large shards
+  </Tab>
+  
+  <Tab title="snapshot">
+    **Best for:** Large shards, minimal network overhead
+    
+    - Creates full shard snapshot
+    - Transfers as single file
+    - Faster for large datasets
+    - Higher disk I/O
+  </Tab>
+  
+  <Tab title="wal_delta">
+    **Best for:** Recently diverged replicas
+    
+    - Transfers only WAL changes
+    - Most efficient for sync
+    - Requires valid WAL history
+  </Tab>
+</Tabs>
+
+**Configure default method:**
+```yaml
+storage:
+  shard_transfer_method: stream_records  # or "snapshot" or "wal_delta"
+```
+
+## Load Balancing
+
+### Client-side Load Balancing
+
+Distribute requests across nodes:
+
+```python
+import random
+from qdrant_client import QdrantClient
+
+nodes = [
+    "http://node1:6333",
+    "http://node2:6333",
+    "http://node3:6333"
+]
+
+def get_client():
+    return QdrantClient(url=random.choice(nodes))
+
+# Search request
+client = get_client()
+results = client.search(
+    collection_name="my_collection",
+    query_vector=[0.1, 0.2, ...],
+    limit=10
+)
+```
+
+### Reverse Proxy Load Balancing
+
+#### Nginx Configuration
+
+```nginx
+upstream qdrant_cluster {
+    least_conn;  # Route to least busy node
+    server node1:6333 max_fails=3 fail_timeout=30s;
+    server node2:6333 max_fails=3 fail_timeout=30s;
+    server node3:6333 max_fails=3 fail_timeout=30s;
+}
+
+server {
+    listen 80;
+    
+    location / {
+        proxy_pass http://qdrant_cluster;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        
+        # Health check
+        proxy_next_upstream error timeout http_503;
+    }
+}
+```
+
+## Capacity Planning
+
+### Calculating Shard Size
+
+**Formula:**
+```
+Shard Size (GB) = (Vectors × Dimensions × 4 bytes) + HNSW Index Overhead
+HNSW Overhead ≈ Vectors × Dimensions × M × 1.2 bytes
+```
+
+**Example:**
+- 1M vectors
+- 384 dimensions
+- HNSW M=16
+
+```
+Vector data = 1,000,000 × 384 × 4 = 1.536 GB
+HNSW index ≈ 1,000,000 × 384 × 16 × 1.2 = 7.37 GB
+Total ≈ 9 GB per shard
+```
+
+### Shard Number Recommendations
+
+| Collection Size | Recommended Shards | Reasoning |
+|----------------|-------------------|----------|
+| < 1M vectors | 1-2 | Single node sufficient |
+| 1M - 10M | 3-6 | Balance parallelism and overhead |
+| 10M - 100M | 6-12 | Enable horizontal scaling |
+| > 100M | 12+ | Distribute across many nodes |
+
+<Tip>
+Set `shard_number` as a multiple of your node count for even distribution. With 3 nodes, use 3, 6, 9, or 12 shards.
+</Tip>
+
+### Node Sizing
+
+**General guidelines:**
+
+| Workload | CPUs | RAM | Disk | Notes |
+|----------|------|-----|------|-------|
+| Development | 2-4 | 4-8 GB | 100 GB SSD | Single node |
+| Production Small | 8-16 | 32-64 GB | 500 GB NVMe | 1-3 million vectors/node |
+| Production Medium | 16-32 | 64-128 GB | 1 TB NVMe | 3-10 million vectors/node |
+| Production Large | 32-64 | 128-256 GB | 2+ TB NVMe | 10+ million vectors/node |
+
+## Monitoring Cluster Health
+
+### Cluster Status
+
+```bash
+curl http://localhost:6333/cluster
+```
+
+**Response:**
+```json
+{
+  "result": {
+    "status": "enabled",
+    "peer_id": 1,
+    "peers": {
+      "1": {"uri": "http://node1:6335"},
+      "2": {"uri": "http://node2:6335"},
+      "3": {"uri": "http://node3:6335"}
+    },
+    "raft_info": {
+      "term": 5,
+      "commit": 1234,
+      "pending_operations": 0,
+      "leader": 1,
+      "role": "Leader"
+    }
+  }
+}
+```
+
+### Collection Cluster Info
+
+```bash
+curl http://localhost:6333/collections/{collection_name}/cluster
+```
+
+**Response shows:**
+- Shard distribution
+- Replica states (Active, Dead, Partial, etc.)
+- Ongoing transfers
+- Resharding status
+
+### Key Metrics
+
+```promql
+# Minimum active replicas (should be >= 1)
+collection_active_replicas_min
+
+# Dead replicas (should be 0)
+collection_dead_replicas
+
+# Ongoing shard transfers
+collection_shard_transfer_incoming
+collection_shard_transfer_outgoing
+
+# Cluster working state
+cluster_working_state{state="working"}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Start Small" icon="seedling">
+    Begin with fewer shards and scale up. Resharding up is easier than down.
+  </Card>
+  
+  <Card title="Odd Number of Nodes" icon="hashtag">
+    Use 3, 5, or 7 nodes for Raft consensus. Avoids split-brain scenarios.
+  </Card>
+  
+  <Card title="Monitor Transfers" icon="truck">
+    Limit concurrent shard transfers to avoid overwhelming the network.
+  </Card>
+  
+  <Card title="Test Failover" icon="shield">
+    Regularly test node failure scenarios to validate high availability.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Node won't join cluster">
+    **Causes:**
+    - Network connectivity issues
+    - Incorrect URI or port
+    - TLS configuration mismatch
+    
+    **Solutions:**
+    - Verify network: `nc -zv node1 6335`
+    - Check cluster config matches on all nodes
+    - Review logs for connection errors
+  </Accordion>
+
+  <Accordion title="Shard transfer stuck">
+    **Causes:**
+    - Network interruption
+    - Source or target node failure
+    - Insufficient disk space
+    
+    **Solutions:**
+    - Check transfer status in cluster info
+    - Verify disk space on target node
+    - Cancel and restart transfer if stuck
+    ```bash
+    curl -X POST .../cluster -d '{"abort_transfer": ...}'
+    ```
+  </Accordion>
+
+  <Accordion title="Uneven shard distribution">
+    **Cause:**
+    Nodes added after collection creation.
+    
+    **Solution:**
+    Manually rebalance with shard transfers:
+    ```bash
+    # Move shards to new nodes
+    curl -X POST .../cluster -d '{"move_shard": {...}}'
+    ```
+  </Accordion>
+
+  <Accordion title="High consensus latency">
+    **Causes:**
+    - Network latency between nodes
+    - Underpowered leader node
+    - Too many collections
+    
+    **Solutions:**
+    - Deploy nodes in same region/availability zone
+    - Increase `cluster.consensus.tick_period_ms` (carefully)
+    - Monitor `cluster_pending_operations_total`
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Performance Tuning" icon="gauge" href="/operations/performance-tuning">
+    Optimize for your specific workload
+  </Card>
+  
+  <Card title="Backup & Restore" icon="floppy-disk" href="/operations/backup-restore">
+    Protect your scaled deployment
+  </Card>
+</CardGroup>

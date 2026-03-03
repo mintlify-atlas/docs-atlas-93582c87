@@ -1,0 +1,189 @@
+---
+title: Clear Payload
+openapi: POST /collections/{collection_name}/points/payload/clear
+---
+
+Remove all payload fields from specified points. This operation deletes the entire payload, leaving points with only their vectors and IDs.
+
+## Use Cases
+
+- Reset points to a clean state before re-processing
+- Remove all metadata from test or temporary points
+- Free up storage by removing unnecessary payload data
+- Prepare points for complete payload replacement
+
+## Request Body
+
+<ParamField body="points" type="array">
+  List of point IDs from which to clear all payload. Either `points` or `filter` must be provided.
+  
+  ```json
+  [1, 2, 3, 42]
+  ```
+</ParamField>
+
+<ParamField body="filter" type="object">
+  Filter conditions to select points. All payload will be cleared from points matching the filter. Either `points` or `filter` must be provided.
+  
+  ```json
+  {
+    "must": [
+      {
+        "key": "temporary",
+        "match": {
+          "value": true
+        }
+      }
+    ]
+  }
+  ```
+</ParamField>
+
+<ParamField body="shard_key" type="string | array">
+  Optional shard key to target specific shards in a distributed setup.
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="wait" type="boolean" default="true">
+  If `true`, wait for the operation to complete before returning. If `false`, the operation runs in the background.
+</ParamField>
+
+<ParamField query="ordering" type="string">
+  Write ordering guarantees for the operation. Options: `weak`, `medium`, `strong`.
+</ParamField>
+
+<ParamField query="timeout" type="integer">
+  Operation timeout in seconds.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  Update operation result
+  
+  <ResponseField name="operation_id" type="integer">
+    Sequential number of the operation
+  </ResponseField>
+  
+  <ResponseField name="status" type="string">
+    Operation status: `completed` or `acknowledged`
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Clear Payload from Specific Points
+
+```json
+{
+  "points": [1, 2, 3]
+}
+```
+
+Removes all payload fields from points 1, 2, and 3, leaving only their vectors and IDs.
+
+### Clear Payload by Filter
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "status",
+        "match": {
+          "value": "archived"
+        }
+      }
+    ]
+  }
+}
+```
+
+Clears payload from all points where `status` is `"archived"`.
+
+### Clear Payload with Shard Key
+
+```json
+{
+  "points": [1, 2, 3],
+  "shard_key": "tenant_a"
+}
+```
+
+### Background Operation
+
+Clear payload without waiting for completion:
+
+```bash
+POST /collections/my_collection/points/payload/clear?wait=false
+```
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "temporary",
+        "match": {
+          "value": true
+        }
+      }
+    ]
+  }
+}
+```
+
+## Behavior
+
+- All payload fields are removed from the specified points
+- Point vectors and IDs are **not affected**
+- Points continue to exist in the collection
+- This is a destructive operation - cleared payload cannot be recovered
+- If a point has no payload, the operation completes successfully without error
+
+## Before and After Example
+
+**Before clearing payload:**
+```json
+{
+  "id": 1,
+  "vector": [0.1, 0.2, 0.3],
+  "payload": {
+    "city": "London",
+    "price": 100,
+    "category": "premium"
+  }
+}
+```
+
+**After clearing payload:**
+```json
+{
+  "id": 1,
+  "vector": [0.1, 0.2, 0.3],
+  "payload": {}
+}
+```
+
+## Comparison with Other Operations
+
+| Operation | Effect | Use When |
+|-----------|--------|----------|
+| **Clear Payload** | Removes all payload fields | Need to delete all metadata |
+| [Delete Payload](/api/payload/delete) | Removes specific payload fields | Need to delete only certain fields |
+| [Overwrite Payload](/api/payload/overwrite) | Replaces entire payload | Need to replace with new data |
+
+## Related Operations
+
+- [Delete Payload](/api/payload/delete) - Remove specific payload fields
+- [Set Payload](/api/payload/set) - Add or update payload fields
+- [Delete Points](/api/points/delete) - Remove entire points including vectors

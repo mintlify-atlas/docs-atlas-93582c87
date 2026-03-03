@@ -1,0 +1,343 @@
+---
+title: Quantization
+description: Reduce memory usage and increase search speed with vector quantization
+---
+
+Quantization compresses vectors to use less memory while maintaining acceptable search quality. Qdrant supports three quantization methods, each with different trade-offs.
+
+## Why Use Quantization
+
+Benefits of quantization:
+- **Reduce memory usage**: 4-32x compression depending on method
+- **Increase search speed**: Faster vector comparisons with compressed data
+- **Store more vectors**: Fit larger datasets in the same hardware
+- **Lower costs**: Reduce infrastructure requirements
+
+Trade-offs:
+- Slightly reduced search accuracy (configurable)
+- Additional CPU usage during initial quantization
+- Some methods require reindexing
+
+## Scalar Quantization
+
+Scalar quantization converts 32-bit floats to 8-bit integers, reducing memory by 4x.
+
+### Enable on Collection Creation
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "quantization_config": {
+      "scalar": {
+        "type": "int8",
+        "quantile": 0.99,
+        "always_ram": true
+      }
+    }
+  }'
+```
+
+**Parameters:**
+- `type`: Always `int8` (only supported type currently)
+- `quantile`: Percentile for outlier handling (0.5-1.0, default: 1.0)
+  - `0.99` = ignore top 1% outliers for better compression
+  - `1.0` = use full range (best accuracy, slightly less compression)
+- `always_ram`: Keep quantized vectors in RAM (default: true)
+
+### Enable on Existing Collection
+
+```bash
+curl -X PATCH http://localhost:6333/collections/my_collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "quantization_config": {
+      "scalar": {
+        "type": "int8",
+        "quantile": 0.99,
+        "always_ram": true
+      }
+    }
+  }'
+```
+
+Qdrant will rebuild quantized vectors in the background.
+
+### When to Use Scalar Quantization
+
+<Note>
+**Best for:**
+- General-purpose use cases
+- Good balance of compression and accuracy
+- Works well with any distance metric
+- Minimal accuracy loss (typically less than 1% recall reduction)
+</Note>
+
+## Product Quantization
+
+Product quantization achieves higher compression (16-64x) by splitting vectors into sub-vectors and clustering each independently.
+
+### Enable Product Quantization
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "quantization_config": {
+      "product": {
+        "compression": "x16",
+        "always_ram": true
+      }
+    }
+  }'
+```
+
+**Compression ratios:**
+- `x4`: 4x compression (better accuracy)
+- `x8`: 8x compression
+- `x16`: 16x compression  
+- `x32`: 32x compression
+- `x64`: 64x compression (maximum compression, lower accuracy)
+
+<Warning>
+**Vector Dimension Requirements:**
+Product quantization requires vector dimensions to be divisible by the compression ratio. For example:
+- `x16` requires dimensions divisible by 16
+- 384-dimensional vectors work with all compression ratios
+- Pad vectors if necessary to meet requirements
+</Warning>
+
+### When to Use Product Quantization
+
+<Note>
+**Best for:**
+- Very large collections (millions to billions of vectors)
+- When memory is severely constrained
+- High-dimensional vectors (>512 dimensions)
+- Can tolerate 5-10% recall reduction
+- Cosine or Dot product distance (works better than Euclidean)
+</Note>
+
+## Binary Quantization
+
+Binary quantization converts vectors to binary representation, achieving 32x compression with extremely fast comparison.
+
+### Enable Binary Quantization
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "quantization_config": {
+      "binary": {
+        "always_ram": true
+      }
+    }
+  }'
+```
+
+### When to Use Binary Quantization
+
+<Note>
+**Best for:**
+- Maximum memory reduction
+- Extremely fast search required
+- Vectors with mostly positive or mostly negative values
+- Cosine distance metric
+- Text embeddings from models like OpenAI, Cohere
+</Note>
+
+<Warning>
+**Accuracy Impact:**
+Binary quantization works best with high-dimensional vectors (>512 dims) where the law of large numbers provides stability. May significantly reduce accuracy on low-dimensional vectors.
+</Warning>
+
+## Oversampling and Rescoring
+
+Improve accuracy by oversampling and rescoring with original vectors:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 10,
+    "params": {
+      "quantization": {
+        "rescore": true,
+        "oversampling": 2.0
+      }
+    }
+  }'
+```
+
+**Parameters:**
+- `rescore`: Re-rank results using original vectors (default: true)
+- `oversampling`: Retrieve more candidates for rescoring
+  - `1.0` = retrieve exact limit from quantized index
+  - `2.0` = retrieve 2x limit, rescore to top limit
+  - Higher values improve accuracy but slow down search
+
+<Note>
+**Oversampling Guidelines:**
+- Default (1.0): Good for most use cases
+- 1.5-2.0: Better accuracy with minimal speed impact  
+- 3.0+: Use when accuracy is critical
+- Set `rescore: false` only if speed is more important than accuracy
+</Note>
+
+## Performance Comparison
+
+### Memory Usage (1M vectors, 384 dimensions)
+
+| Method | Memory per vector | Total Memory | Compression |
+|--------|-------------------|--------------|-------------|
+| No quantization | 1,536 bytes | 1.5 GB | 1x |
+| Scalar (int8) | 384 bytes | 384 MB | 4x |
+| Product (x16) | 96 bytes | 96 MB | 16x |
+| Product (x32) | 48 bytes | 48 MB | 32x |
+| Binary | 48 bytes | 48 MB | 32x |
+
+### Search Speed Impact
+
+| Method | Speed vs Original | Typical Recall |
+|--------|-------------------|----------------|
+| No quantization | 1.0x (baseline) | 100% |
+| Scalar (int8) | 1.5-2.0x faster | 99%+ |
+| Product (x16) | 2-3x faster | 95-98% |
+| Product (x32) | 3-4x faster | 90-95% |
+| Binary | 4-8x faster | 85-95% |
+
+*Results vary based on hardware, vector dimensions, and data distribution*
+
+## Choosing a Quantization Method
+
+<Steps>
+  <Step title="Start with Scalar">
+    For most applications, scalar quantization provides the best balance:
+    - 4x memory reduction
+    - Minimal accuracy loss
+    - Works with all distance metrics
+    - Easy to configure
+  </Step>
+
+  <Step title="Consider Product for extreme cases">
+    Use product quantization when:
+    - You need >4x compression
+    - Have very large collections
+    - Can tolerate some accuracy loss
+    - Use Cosine or Dot distance
+  </Step>
+
+  <Step title="Try Binary for speed">
+    Use binary quantization when:
+    - Maximum speed is critical
+    - Using text embeddings (OpenAI, Cohere, etc.)
+    - Vectors are high-dimensional (>512)
+    - Willing to test accuracy on your data
+  </Step>
+
+  <Step title="Test on your data">
+    Always benchmark quantization methods on your specific:
+    - Vector model and dimensions
+    - Query patterns
+    - Accuracy requirements
+    - Hardware constraints
+  </Step>
+</Steps>
+
+## Monitoring Quantization
+
+Check quantization status in collection info:
+
+```bash
+curl http://localhost:6333/collections/my_collection
+```
+
+**Response:**
+```json
+{
+  "result": {
+    "status": "yellow",
+    "config": {
+      "params": {...},
+      "quantization_config": {
+        "scalar": {
+          "type": "int8",
+          "quantile": 0.99,
+          "always_ram": true
+        }
+      }
+    },
+    "vectors_count": 1000000,
+    "indexed_vectors_count": 1000000
+  }
+}
+```
+
+Status will be `yellow` during quantization, `green` when complete.
+
+## Disabling Quantization
+
+Remove quantization from a collection:
+
+```bash
+curl -X PATCH http://localhost:6333/collections/my_collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "quantization_config": null
+  }'
+```
+
+This will rebuild the collection without quantization.
+
+## Best Practices
+
+<Note>
+**Quantization Tips:**
+1. **Test before production**: Always test quantization impact on your data
+2. **Monitor recall**: Track search quality metrics after enabling
+3. **Use oversampling**: Start with 2.0x oversampling for safety
+4. **Keep rescore enabled**: Only disable if speed is absolutely critical
+5. **Combine with HNSW tuning**: Adjust `hnsw_ef` alongside quantization
+6. **Consider on_disk**: For very large collections, use `on_disk` storage with quantization
+</Note>
+
+## Troubleshooting
+
+<Warning>
+**Low Search Quality:**
+If search results worsen after quantization:
+1. Increase oversampling (2.0 → 3.0)
+2. Try different quantization method
+3. Adjust quantile parameter for scalar
+4. Reduce compression ratio for product quantization
+5. Ensure rescore is enabled
+</Warning>
+
+<Warning>
+**High Memory Usage:**
+If memory didn't decrease as expected:
+1. Verify quantization completed (check status)
+2. Ensure `always_ram` is configured correctly
+3. Check if original vectors are still stored (they are, for rescoring)
+4. Consider using `on_disk: true` for original vectors
+</Warning>
+
+## Next Steps
+
+- Learn about [sparse vectors](/guides/sparse-vectors) for keyword-based search
+- Explore [hybrid search](/guides/hybrid-search) combining multiple vector types
+- Optimize [HNSW configuration](guides/creating-collections) for your use case

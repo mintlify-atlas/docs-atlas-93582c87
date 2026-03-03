@@ -1,0 +1,716 @@
+---
+title: Performance Tuning
+description: Optimization strategies and configuration tips for Qdrant
+---
+
+## Overview
+
+Qdrant offers numerous configuration options to optimize performance for your specific workload. This guide covers indexing, search, memory, and I/O optimization.
+
+## Indexing Configuration
+
+### HNSW Index Parameters
+
+The HNSW (Hierarchical Navigable Small World) index is Qdrant's primary vector index.
+
+#### Global HNSW Configuration
+
+```yaml
+# config/config.yaml
+storage:
+  hnsw_index:
+    # Number of edges per node (higher = better accuracy, more memory)
+    m: 16
+    
+    # Neighbors considered during construction (higher = better quality)
+    ef_construct: 100
+    
+    # Full-scan threshold in KB (below this, skip HNSW)
+    full_scan_threshold_kb: 10000
+    
+    # Index building threads (8-16 recommended)
+    max_indexing_threads: 0  # 0 = auto
+    
+    # Store index on disk (reduces RAM)
+    on_disk: false
+    
+    # Custom M for payload indexes
+    payload_m: null
+```
+
+#### Collection-level HNSW
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "hnsw_config": {
+      "m": 16,
+      "ef_construct": 100,
+      "full_scan_threshold": 10000,
+      "on_disk": false
+    }
+  }'
+```
+
+<Note>
+**Parameter trade-offs:**
+- **m**: Higher values (32-64) improve recall but increase memory 2x
+- **ef_construct**: Higher values (200-500) improve graph quality but slow indexing
+- **on_disk**: Reduces RAM usage significantly but increases query latency
+</Note>
+
+### Search-time Parameters
+
+Control accuracy vs. speed at query time:
+
+```bash
+curl -X POST http://localhost:6333/collections/{collection_name}/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.1, 0.2, ...],
+    "limit": 10,
+    "params": {
+      "hnsw_ef": 128,        # Higher = better recall (default: 128)
+      "exact": false,         # true = brute force (slow but perfect)
+      "indexed_only": false   # Skip unindexed vectors
+    }
+  }'
+```
+
+**Recommendations:**
+- `hnsw_ef: 64` - Fast, 95%+ recall
+- `hnsw_ef: 128` - Balanced (default)
+- `hnsw_ef: 256+` - High accuracy, slower
+
+### Quantization
+
+Reduce memory footprint and improve cache efficiency.
+
+#### Scalar Quantization
+
+Convert float32 vectors to int8:
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "quantization_config": {
+      "scalar": {
+        "type": "int8",
+        "quantile": 0.99,     # Outlier clipping
+        "always_ram": true    # Keep quantized vectors in RAM
+      }
+    }
+  }'
+```
+
+**Benefits:**
+- 4x memory reduction
+- 2-4x faster queries
+- Minimal accuracy loss (less than 1%)
+
+#### Product Quantization
+
+For extreme memory savings:
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "quantization_config": {
+      "product": {
+        "compression": "x16",  # 16x compression
+        "always_ram": true
+      }
+    }
+  }'
+```
+
+**Benefits:**
+- 16-64x memory reduction
+- Lower query quality than scalar
+- Best for huge datasets
+
+### Binary Quantization
+
+For compatible embeddings (e.g., Cohere v3):
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "quantization_config": {
+      "binary": {
+        "always_ram": true
+      }
+    }
+  }'
+```
+
+**Benefits:**
+- 32x memory reduction
+- Fastest queries
+- Requires compatible embeddings
+
+## Optimizer Configuration
+
+Qdrant continuously optimizes segment structure in the background.
+
+### Global Optimizer Settings
+
+```yaml
+# config/config.yaml
+storage:
+  optimizers:
+    # Delete threshold (0.2 = optimize when 20% deleted)
+    deleted_threshold: 0.2
+    
+    # Minimum vectors before optimization
+    vacuum_min_vector_number: 1000
+    
+    # Target segment count (0 = auto, based on CPUs)
+    default_segment_number: 0
+    
+    # Max segment size in KB (null = auto)
+    max_segment_size_kb: null
+    
+    # Indexing threshold in KB (vectors above this get indexed)
+    indexing_threshold_kb: 10000
+    
+    # Flush interval in seconds
+    flush_interval_sec: 5
+    
+    # Max concurrent optimization jobs (null = dynamic)
+    max_optimization_threads: null
+```
+
+### Collection-level Optimizers
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {"size": 384, "distance": "Cosine"},
+    "optimizers_config": {
+      "deleted_threshold": 0.2,
+      "vacuum_min_vector_number": 1000,
+      "default_segment_number": 4,
+      "max_segment_size": 200000,
+      "indexing_threshold": 10000,
+      "flush_interval_sec": 5
+    }
+  }'
+```
+
+### Optimization Strategies
+
+<Tabs>
+  <Tab title="Write-heavy">
+    Optimize for high ingestion rate:
+    
+    ```yaml
+    optimizers:
+      deleted_threshold: 0.3     # Less frequent optimization
+      default_segment_number: 8  # More segments = better parallelism
+      max_segment_size_kb: 100000  # Smaller segments = faster indexing
+      flush_interval_sec: 10     # Less frequent flushes
+    ```
+  </Tab>
+  
+  <Tab title="Read-heavy">
+    Optimize for query performance:
+    
+    ```yaml
+    optimizers:
+      deleted_threshold: 0.1     # Aggressive cleanup
+      default_segment_number: 4  # Fewer segments = better cache
+      max_segment_size_kb: 500000  # Large segments = better compression
+      flush_interval_sec: 3      # Frequent flushes
+    ```
+  </Tab>
+  
+  <Tab title="Balanced">
+    Default balanced configuration:
+    
+    ```yaml
+    optimizers:
+      deleted_threshold: 0.2
+      default_segment_number: 0  # Auto based on CPUs
+      max_segment_size_kb: null  # Auto
+      flush_interval_sec: 5
+    ```
+  </Tab>
+</Tabs>
+
+## Search Performance
+
+### Multi-threading
+
+Control parallelism for search operations:
+
+```yaml
+storage:
+  performance:
+    # Search threads (0 = all available cores)
+    max_search_threads: 0
+```
+
+<Tip>
+Set `max_search_threads` to the number of segments for optimal load distribution. With 4 segments, use 4 threads.
+</Tip>
+
+### Payload Indexing
+
+Index frequently filtered fields:
+
+```bash
+# Create payload index
+curl -X PUT http://localhost:6333/collections/{collection_name}/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "category",
+    "field_schema": "keyword"  # or "integer", "float", "geo", "text"
+  }'
+```
+
+**Index types:**
+- `keyword` - Exact match (categories, tags)
+- `integer` - Numeric range queries
+- `float` - Floating-point ranges
+- `geo` - Geospatial queries
+- `text` - Full-text search
+
+<Warning>
+Over-indexing increases memory usage and write latency. Only index fields used in filters.
+</Warning>
+
+### Query Optimization
+
+#### Prefiltering
+
+Use indexed filters for better performance:
+
+```bash
+curl -X POST http://localhost:6333/collections/{collection_name}/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.1, 0.2, ...],
+    "filter": {
+      "must": [
+        {"key": "category", "match": {"value": "electronics"}}
+      ]
+    },
+    "limit": 10,
+    "params": {
+      "indexed_only": true  # Skip unindexed points in filtered results
+    }
+  }'
+```
+
+#### Batch Queries
+
+Combine multiple searches into one request:
+
+```bash
+curl -X POST http://localhost:6333/collections/{collection_name}/points/search/batch \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "searches": [
+      {"vector": [0.1, ...], "limit": 10},
+      {"vector": [0.2, ...], "limit": 10},
+      {"vector": [0.3, ...], "limit": 10}
+    ]
+  }'
+```
+
+**Benefits:**
+- Reduced network overhead
+- Better batching in GPU operations
+- Lower latency for multiple queries
+
+## Memory Optimization
+
+### On-Disk Storage
+
+Move data from RAM to disk:
+
+```yaml
+storage:
+  # Payload on disk
+  on_disk_payload: true
+  
+  # Vectors on disk (collection-level)
+  collection:
+    vectors:
+      on_disk: true
+  
+  # HNSW index on disk
+  hnsw_index:
+    on_disk: true
+```
+
+**Collection override:**
+```bash
+curl -X PATCH http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "on_disk": true
+    },
+    "hnsw_config": {
+      "on_disk": true
+    }
+  }'
+```
+
+### Memory Map (mmap)
+
+Use memory-mapped files for large segments:
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name} \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {"size": 384, "distance": "Cosine"},
+    "optimizers_config": {
+      "memmap_threshold_kb": 50000  # Segments > 50MB use mmap
+    }
+  }'
+```
+
+<Note>
+mmap allows the OS to manage memory, reducing RSS usage while maintaining good performance.
+</Note>
+
+## I/O Performance
+
+### Write-Ahead Log (WAL)
+
+Optimize WAL for your workload:
+
+```yaml
+storage:
+  wal:
+    # Segment size in MB
+    wal_capacity_mb: 32
+    
+    # Preallocate segments
+    wal_segments_ahead: 0
+    
+    # Retain closed segments
+    wal_retain_closed: 1
+```
+
+**Write-heavy workloads:**
+```yaml
+wal:
+  wal_capacity_mb: 64     # Larger segments
+  wal_segments_ahead: 2   # Preallocate for smoother writes
+```
+
+### Async Scorer (Linux)
+
+Use io_uring for faster rescoring:
+
+```yaml
+storage:
+  performance:
+    async_scorer: true  # Linux only, requires kernel support
+```
+
+<Tip>
+io_uring can significantly improve latency for on-disk vector rescoring. Check kernel support: `uname -r` (requires 5.1+)
+</Tip>
+
+### Concurrent Operations
+
+```yaml
+storage:
+  performance:
+    # Update rate limit (requests/sec, null = unlimited)
+    update_rate_limit: null
+    
+    # Concurrent collection loads
+    max_concurrent_collection_loads: 1
+    
+    # Concurrent shard loads per collection
+    max_concurrent_shard_loads: 1
+    
+    # Concurrent segment loads per shard
+    max_concurrent_segment_loads: 8
+```
+
+## CPU Optimization
+
+### Thread Allocation
+
+```yaml
+storage:
+  performance:
+    # Search threads
+    max_search_threads: 0
+    
+    # Optimizer CPU budget
+    # 0 = auto, negative = subtract from total, positive = exact
+    optimizer_cpu_budget: 0
+  
+  hnsw_index:
+    # Indexing threads (8-16 recommended)
+    max_indexing_threads: 0
+  
+  optimizers:
+    # Optimization jobs (null = dynamic)
+    max_optimization_threads: null
+
+service:
+  # API workers
+  max_workers: 0
+```
+
+**Example allocation for 16-core server:**
+```yaml
+service:
+  max_workers: 4         # API workers
+
+storage:
+  performance:
+    max_search_threads: 8  # Search
+  
+  hnsw_index:
+    max_indexing_threads: 12  # Indexing
+  
+  optimizers:
+    max_optimization_threads: 2  # Background optimization
+```
+
+### SIMD Optimization
+
+Qdrant automatically uses SIMD instructions (AVX2, AVX512, NEON) when available. Ensure your binaries are compiled with CPU feature support:
+
+```bash
+# Check features
+lscpu | grep -i avx
+
+# Docker automatically selects best image
+docker run qdrant/qdrant:latest
+```
+
+## Network Optimization
+
+### gRPC vs REST
+
+gRPC offers better performance for high-throughput scenarios:
+
+```yaml
+service:
+  grpc_port: 6334  # Enable gRPC
+```
+
+```python
+from qdrant_client import QdrantClient
+
+# Use gRPC
+client = QdrantClient(
+    url="localhost",
+    grpc_port=6334,
+    prefer_grpc=True
+)
+```
+
+### Request Batching
+
+Batch operations for better throughput:
+
+```python
+# Batch upsert
+client.upsert(
+    collection_name="my_collection",
+    points=[
+        PointStruct(id=i, vector=..., payload=...)
+        for i in range(1000)
+    ]
+)
+
+# Batch search
+results = client.search_batch(
+    collection_name="my_collection",
+    requests=[
+        SearchRequest(vector=..., limit=10)
+        for _ in range(100)
+    ]
+)
+```
+
+## Monitoring Performance
+
+### Key Metrics
+
+```promql
+# Query latency percentiles
+histogram_quantile(0.95, rate(rest_responses_duration_seconds_bucket[5m]))
+histogram_quantile(0.99, rate(rest_responses_duration_seconds_bucket[5m]))
+
+# Throughput
+rate(rest_responses_total[1m])
+
+# Optimization load
+collection_running_optimizations
+
+# Memory usage
+memory_resident_bytes
+
+# Cache hit rate (lower page faults = better caching)
+rate(process_major_page_faults_total[5m])
+```
+
+## Benchmarking
+
+### Load Testing
+
+Use tools like `wrk` or `locust` for load testing:
+
+```bash
+# Install wrk
+sudo apt install wrk
+
+# Test search endpoint
+wrk -t 4 -c 100 -d 30s --latency \
+  -s search.lua \
+  http://localhost:6333/collections/my_collection/points/search
+```
+
+**search.lua:**
+```lua
+wrk.method = "POST"
+wrk.headers["Content-Type"] = "application/json"
+wrk.body = '{
+  "vector": [0.1, 0.2, ...],
+  "limit": 10
+}'
+```
+
+### Profiling
+
+Enable stacktrace collection for debugging:
+
+```bash
+# Start with debug profiling
+./qdrant --stacktrace
+
+# Get current stacktrace
+curl http://localhost:6333/stacktrace
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Start Conservative" icon="shield">
+    Use default settings first, then optimize based on actual metrics.
+  </Card>
+  
+  <Card title="Monitor Before Tuning" icon="chart-line">
+    Establish baseline metrics before making changes.
+  </Card>
+  
+  <Card title="One Change at a Time" icon="sliders">
+    Modify one parameter at a time to isolate impact.
+  </Card>
+  
+  <Card title="Test Under Load" icon="bolt">
+    Always test configuration changes with realistic workloads.
+  </Card>
+</CardGroup>
+
+## Configuration Templates
+
+### High-Throughput Writes
+
+```yaml
+storage:
+  on_disk_payload: true
+  
+  wal:
+    wal_capacity_mb: 64
+    wal_segments_ahead: 2
+  
+  optimizers:
+    deleted_threshold: 0.3
+    max_segment_size_kb: 100000
+    flush_interval_sec: 10
+    max_optimization_threads: 4
+  
+  hnsw_index:
+    m: 16
+    ef_construct: 100
+    max_indexing_threads: 16
+```
+
+### Low-Latency Queries
+
+```yaml
+storage:
+  on_disk_payload: false  # Keep in RAM
+  
+  hnsw_index:
+    m: 32               # Better accuracy
+    ef_construct: 200
+    on_disk: false      # Index in RAM
+  
+  optimizers:
+    deleted_threshold: 0.1
+    default_segment_number: 4
+    max_segment_size_kb: 500000
+  
+  performance:
+    max_search_threads: 8
+    async_scorer: true
+```
+
+### Memory-Constrained
+
+```yaml
+storage:
+  on_disk_payload: true
+  
+  hnsw_index:
+    m: 16
+    on_disk: true
+  
+  collection:
+    vectors:
+      on_disk: true
+    
+    quantization:
+      scalar:
+        type: int8
+        always_ram: false
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Set up metrics to track performance improvements
+  </Card>
+  
+  <Card title="Troubleshooting" icon="wrench" href="/operations/troubleshooting">
+    Diagnose and resolve performance issues
+  </Card>
+</CardGroup>

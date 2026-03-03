@@ -1,0 +1,773 @@
+---
+title: Query Optimization
+description: Optimize search performance with HNSW tuning, query planning, and performance analysis
+---
+
+Qdrant offers extensive query optimization capabilities to achieve the right balance between search speed, accuracy, and resource utilization.
+
+## HNSW Index Configuration
+
+### Core Parameters
+
+HNSW (Hierarchical Navigable Small World) parameters (`lib/segment/src/index/hnsw_index/config.rs:11`):
+
+```rust
+pub struct HnswGraphConfig {
+    pub m: usize,                    // Connections per layer
+    pub m0: usize,                   // Connections on layer 0 (2 * m)
+    pub ef_construct: usize,         // Build-time search depth
+    pub ef: usize,                   // Default search depth
+    pub full_scan_threshold: usize,  // When to use brute force
+    pub max_indexing_threads: usize, // Parallel indexing
+    // ...
+}
+```
+
+### M Parameter (Graph Connectivity)
+
+**Definition:** Number of bidirectional links per vector in the graph.
+
+```json
+{
+  "hnsw_config": {
+    "m": 16  // Typical values: 8-64
+  }
+}
+```
+
+**Impact:**
+- **Low M (4-8):**
+  - ✅ Lower memory usage (~200 bytes per vector at M=4)
+  - ✅ Faster indexing
+  - ⚠️ Lower recall (less than 90% typical)
+  - ⚠️ Slower search on large datasets
+
+- **Medium M (16-32):**
+  - ✅ Balanced performance (95-98% recall)
+  - ✅ Good for most use cases
+  - Memory: ~400-800 bytes per vector
+
+- **High M (48-64):**
+  - ✅ Highest accuracy (>99% recall)
+  - ⚠️ Higher memory (1-2 KB per vector)
+  - ⚠️ Slower indexing
+
+**Memory calculation:**
+```
+HNSW Memory ≈ vectors_count * M * 8 bytes * avg_layers
+avg_layers ≈ 1 / ln(M) ≈ 2.5 for M=16
+
+Example: 1M vectors, M=16
+  = 1,000,000 * 16 * 8 * 2.5 = 320 MB
+```
+
+### ef_construct (Build Quality)
+
+**Definition:** Search depth during index construction.
+
+```json
+{
+  "hnsw_config": {
+    "ef_construct": 100  // Typical values: 64-512
+  }
+}
+```
+
+**Impact:**
+- **Low ef_construct (64-128):**
+  - ✅ Fast indexing
+  - ⚠️ Lower graph quality (may reduce recall by 1-2%)
+
+- **High ef_construct (256-512):**
+  - ✅ Better graph quality (higher recall)
+  - ⚠️ Slower indexing (2-4x)
+
+**Rule of thumb:**
+```
+ef_construct ≥ 2 * M  (minimum for good quality)
+ef_construct = 4 * M  (recommended)
+ef_construct = 8 * M  (maximum quality)
+```
+
+**Example:**
+```json
+{
+  "hnsw_config": {
+    "m": 16,
+    "ef_construct": 100  // Good balance (6.25 * M)
+  }
+}
+```
+
+### ef (Search Depth)
+
+**Definition:** Breadth of search at query time.
+
+```json
+{
+  "hnsw_config": {
+    "ef": 100  // Default search depth
+  }
+}
+```
+
+**Can be overridden per query:**
+```python
+client.search(
+    collection_name="products",
+    query_vector=[...],
+    limit=10,
+    search_params={"hnsw_ef": 128}  // Override for this query
+)
+```
+
+**Impact:**
+- **Low ef (16-64):**
+  - ✅ Fast search (less than 1ms for 100K vectors)
+  - ⚠️ Lower recall (80-90%)
+
+- **Medium ef (64-128):**  
+  - ✅ Balanced (95-98% recall)
+  - Search time: 1-3ms
+
+- **High ef (256-512):**
+  - ✅ High recall (99%+)
+  - ⚠️ Slower search (5-10ms)
+
+**Dynamic tuning strategy:**
+```python
+# Start conservative, increase if needed
+def search_with_adaptive_ef(query, initial_ef=64, max_ef=256):
+    ef = initial_ef
+    while ef <= max_ef:
+        results = client.search(
+            collection_name="products",
+            query_vector=query,
+            limit=10,
+            search_params={"hnsw_ef": ef}
+        )
+        
+        # Check if top result is confident
+        if len(results) > 0 and results[0].score > 0.95:
+            return results  # High confidence, return early
+        
+        ef *= 2  # Double ef and retry
+    
+    return results
+```
+
+### full_scan_threshold (Indexing Threshold)
+
+**Definition:** Vector count below which brute-force search is faster than HNSW.
+
+```json
+{
+  "hnsw_config": {
+    "full_scan_threshold": 10000  // Default: 10K vectors
+  }
+}
+```
+
+**Or use global optimizer config:**
+```json
+{
+  "optimizers_config": {
+    "indexing_threshold": 10000  // Same effect (in KB, 1KB = 1 vector of dim 256)
+  }
+}
+```
+
+**Guidelines:**
+- < 1,000 vectors: Use full scan (faster)
+- 1K-10K vectors: Test both approaches
+- > 10K vectors: Always use HNSW
+
+**Disable indexing entirely:**
+```json
+{
+  "optimizers_config": {
+    "indexing_threshold": 0  // Force full scan always
+  }
+}
+```
+
+### max_indexing_threads
+
+**Definition:** Parallel threads for index building.
+
+```json
+{
+  "hnsw_config": {
+    "max_indexing_threads": 0  // 0 = auto (num_cpus)
+  }
+}
+```
+
+**Configuration levels** (`lib/collection/src/optimizers_builder.rs:179`):
+
+```rust
+let num_indexing_threads = num_rayon_threads(hnsw_config.max_indexing_threads);
+
+// Priority:
+// 1. hnsw_config.max_indexing_threads (if set)
+// 2. Global storage.performance.max_search_threads
+// 3. System CPU count
+```
+
+**Tuning:**
+- Small collections: 1-2 threads (avoid overhead)
+- Medium collections: 4-8 threads
+- Large collections: 8-16 threads (diminishing returns after 16)
+
+## Search Optimization
+
+### Combining Search Parameters
+
+Optimal configuration example:
+
+```python
+results = client.search(
+    collection_name="products",
+    query_vector=embedding,
+    limit=10,
+    search_params={
+        "hnsw_ef": 128,           # Search depth
+        "exact": False,           # Use HNSW (not brute force)
+        "indexed_only": False,    # Search all vectors
+    },
+    query_filter=Filter(...),     # Apply filters
+    with_payload=True,
+    with_vectors=False,           # Don't return vectors (faster)
+    score_threshold=0.7,          # Minimum similarity
+)
+```
+
+### Query Filters Optimization
+
+**Impact of filters:**
+- Unindexed filters: Scan all candidates, then filter (slow)
+- Indexed filters: Pre-filter before search (fast)
+
+**Create indexes for common filters:**
+```python
+# Index frequently filtered fields
+client.create_payload_index(
+    collection_name="products",
+    field_name="category",
+    field_schema="keyword"  # Fast exact match
+)
+
+client.create_payload_index(
+    collection_name="products",
+    field_name="price",
+    field_schema="integer"  # Fast range queries
+)
+```
+
+**Query with indexed filters:**
+```python
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+results = client.search(
+    collection_name="products",
+    query_vector=embedding,
+    query_filter=Filter(
+        must=[
+            FieldCondition(
+                key="category",
+                match=MatchValue(value="electronics")  # Uses index
+            )
+        ]
+    ),
+    limit=10
+)
+```
+
+**Filter cardinality impact:**
+- High cardinality (many unique values): Indexing helps significantly
+- Low cardinality (few unique values): Index may not help much
+- Very selective filters (< 1% match): May be slower with index
+
+### Rescore and Oversampling
+
+Use quantization with rescoring for accuracy:
+
+```python
+results = client.search(
+    collection_name="products",
+    query_vector=embedding,
+    limit=10,
+    search_params={
+        "quantization": {
+            "rescore": True,        # Rerank with full vectors
+            "oversampling": 2.0     # Fetch 2x candidates (20 instead of 10)
+        }
+    }
+)
+```
+
+**Oversampling values:**
+- 1.0 (disabled): Fastest, lower accuracy
+- 1.5-2.0: Good balance (recommended)
+- 3.0-5.0: High accuracy, slower
+
+**When to use:**
+- Always with product quantization (PQ)
+- Often with binary quantization
+- Optional with scalar quantization (SQ)
+
+### Pagination Optimization
+
+Efficient pagination for large result sets:
+
+```python
+# Bad: Large offset (slow)
+results = client.search(
+    collection_name="products",
+    query_vector=embedding,
+    limit=10,
+    offset=1000  # Fetches and discards 1000 results
+)
+
+# Good: Scroll API (fast)
+from qdrant_client.models import ScrollRequest
+
+scroll_result = client.scroll(
+    collection_name="products",
+    scroll_filter=Filter(...),
+    limit=100,
+    offset=None,  # Start from beginning
+    with_payload=True,
+    with_vectors=False
+)
+
+while scroll_result[1] is not None:  # More results available
+    process_batch(scroll_result[0])
+    scroll_result = client.scroll(
+        collection_name="products",
+        scroll_filter=Filter(...),
+        limit=100,
+        offset=scroll_result[1],  # Continue from last position
+        with_payload=True,
+        with_vectors=False
+    )
+```
+
+### Batch Search Optimization
+
+Search multiple queries efficiently:
+
+```python
+# Bad: Sequential searches
+for query in queries:
+    results = client.search(
+        collection_name="products",
+        query_vector=query,
+        limit=10
+    )
+    process(results)
+
+# Good: Batch search
+results = client.search_batch(
+    collection_name="products",
+    requests=[
+        SearchRequest(
+            vector=query,
+            limit=10,
+            with_payload=True
+        )
+        for query in queries
+    ]
+)
+```
+
+**Performance:**
+- Batch search: ~1.5x faster for 10 queries
+- Shared overhead (connection, parsing)
+- Parallel execution on server
+
+## Payload Optimization
+
+### with_payload Strategies
+
+Control payload retrieval to optimize speed:
+
+```python
+# 1. No payload (fastest)
+results = client.search(
+    collection_name="products",
+    query_vector=embedding,
+    limit=10,
+    with_payload=False  # Only IDs and scores
+)
+
+# 2. Specific fields only
+results = client.search(
+    collection_name="products",
+    query_vector=embedding,
+    limit=10,
+    with_payload=["title", "price"]  # Only needed fields
+)
+
+# 3. All payload (slowest)
+results = client.search(
+    collection_name="products",
+    query_vector=embedding,
+    limit=10,
+    with_payload=True  # Full payload
+)
+```
+
+**Performance impact:**
+- No payload: 0ms overhead
+- Specific fields: 0.1-0.5ms overhead
+- Full payload: 0.5-2ms overhead (depends on size)
+
+### Payload Size Optimization
+
+Keep payload lean:
+
+```python
+# Bad: Store large data in payload
+client.upsert(
+    collection_name="products",
+    points=[
+        PointStruct(
+            id=1,
+            vector=[...],
+            payload={
+                "title": "Product Name",
+                "description": "Very long description..." * 100,  # Too large
+                "image_data": base64_image,  # Store elsewhere
+            }
+        )
+    ]
+)
+
+# Good: Store only essential metadata
+client.upsert(
+    collection_name="products",
+    points=[
+        PointStruct(
+            id=1,
+            vector=[...],
+            payload={
+                "title": "Product Name",
+                "description_url": "https://cdn.example.com/desc/1.txt",
+                "image_url": "https://cdn.example.com/img/1.jpg",
+                "price": 29.99,
+                "category": "electronics"
+            }
+        )
+    ]
+)
+```
+
+## Performance Monitoring
+
+### Query Profiling
+
+Measure query performance:
+
+```python
+import time
+from statistics import mean, stdev
+
+def benchmark_search(query_vector, iterations=100):
+    latencies = []
+    
+    for _ in range(iterations):
+        start = time.perf_counter()
+        results = client.search(
+            collection_name="products",
+            query_vector=query_vector,
+            limit=10
+        )
+        latency = (time.perf_counter() - start) * 1000  # ms
+        latencies.append(latency)
+    
+    return {
+        "mean": mean(latencies),
+        "stdev": stdev(latencies),
+        "min": min(latencies),
+        "max": max(latencies),
+        "p95": sorted(latencies)[int(0.95 * len(latencies))],
+        "p99": sorted(latencies)[int(0.99 * len(latencies))],
+    }
+
+stats = benchmark_search(test_query)
+print(f"Mean: {stats['mean']:.2f}ms")
+print(f"P95: {stats['p95']:.2f}ms")
+print(f"P99: {stats['p99']:.2f}ms")
+```
+
+### Collection Statistics
+
+Monitor collection health:
+
+```python
+info = client.get_collection("products")
+
+print(f"Points: {info.points_count:,}")
+print(f"Vectors: {info.vectors_count:,}")
+print(f"Segments: {len(info.segments)}")
+
+for i, segment in enumerate(info.segments):
+    print(f"\nSegment {i}:")
+    print(f"  Points: {segment.num_points:,}")
+    print(f"  Deleted: {segment.num_deleted_points:,}")
+    print(f"  Indexed: {segment.num_indexed_vectors:,}")
+    print(f"  Type: {segment.segment_type}")
+```
+
+### Metrics and Telemetry
+
+Qdrant exposes Prometheus metrics:
+
+```bash
+curl http://localhost:6333/metrics
+```
+
+**Key metrics:**
+- `qdrant_search_duration_seconds`: Search latency histogram
+- `qdrant_search_total`: Total searches
+- `qdrant_index_total`: Total vectors indexed
+- `qdrant_collection_running_optimizations`: Active optimizations
+
+**Example Prometheus query:**
+```promql
+# 95th percentile search latency
+histogram_quantile(0.95, 
+  rate(qdrant_search_duration_seconds_bucket[5m])
+)
+
+# Searches per second
+rate(qdrant_search_total[1m])
+```
+
+## Best Practices
+
+### 1. Start with Conservative HNSW Settings
+
+```json
+{
+  "hnsw_config": {
+    "m": 16,
+    "ef_construct": 100,
+    "ef": 128
+  }
+}
+```
+
+Tune based on benchmarks.
+
+### 2. Index Frequently Filtered Fields
+
+```python
+# Analyze your queries
+common_filters = analyze_query_log()
+
+for field in common_filters:
+    client.create_payload_index(
+        collection_name="products",
+        field_name=field,
+        field_schema="keyword"  # or "integer", "geo", etc.
+    )
+```
+
+### 3. Use Appropriate Quantization
+
+```json
+{
+  "quantization_config": {
+    "scalar": {
+      "type": "int8",
+      "always_ram": true
+    }
+  }
+}
+```
+
+Always enable rescoring:
+```python
+search_params={"quantization": {"rescore": True}}
+```
+
+### 4. Optimize Payload Size
+
+Keep payload under 1KB per point for best performance.
+
+### 5. Use Batch Operations
+
+```python
+# Batch insert
+client.upsert(
+    collection_name="products",
+    points=batch_of_points  # 100-1000 points
+)
+
+# Batch search  
+client.search_batch(
+    collection_name="products",
+    requests=batch_of_requests
+)
+```
+
+### 6. Monitor and Iterate
+
+```python
+# A/B test configurations
+config_a = {"hnsw_ef": 64}
+config_b = {"hnsw_ef": 128}
+
+results_a = benchmark_config(config_a)
+results_b = benchmark_config(config_b)
+
+if results_b["recall"] > results_a["recall"] and \
+   results_b["latency"] < results_a["latency"] * 1.5:
+    deploy_config(config_b)
+```
+
+## Advanced Techniques
+
+### Hybrid Search (Vector + Filter)
+
+Combine vector similarity with business logic:
+
+```python
+from qdrant_client.models import Filter, Range
+
+results = client.search(
+    collection_name="products",
+    query_vector=embedding,
+    query_filter=Filter(
+        must=[
+            FieldCondition(key="in_stock", match=MatchValue(value=True)),
+            FieldCondition(key="price", range=Range(lte=100.0)),
+        ],
+        should=[
+            FieldCondition(key="featured", match=MatchValue(value=True)),
+        ],
+        min_should_match=0
+    ),
+    limit=10,
+    search_params={"hnsw_ef": 128}
+)
+```
+
+### Multi-Vector Search
+
+Search multiple vector spaces:
+
+```python
+from qdrant_client.models import NamedVector
+
+# Index with multiple vectors
+client.upsert(
+    collection_name="products",
+    points=[
+        PointStruct(
+            id=1,
+            vector={
+                "text": text_embedding,
+                "image": image_embedding,
+            },
+            payload={...}
+        )
+    ]
+)
+
+# Search using specific vector
+results = client.search(
+    collection_name="products",
+    query_vector=NamedVector(
+        name="text",
+        vector=query_embedding
+    ),
+    limit=10
+)
+```
+
+### Recommendation Search
+
+Find similar items to existing ones:
+
+```python
+results = client.recommend(
+    collection_name="products",
+    positive=[1, 5, 10],  # IDs of liked items
+    negative=[3, 7],      # IDs of disliked items  
+    limit=10,
+    strategy="average_vector"  # or "best_score"
+)
+```
+
+## Troubleshooting
+
+### Slow Queries
+
+**Symptoms:** Search takes >100ms
+
+**Diagnostics:**
+1. Check HNSW parameters:
+   ```python
+   info = client.get_collection("products")
+   print(info.config.params.vectors.hnsw_config)
+   ```
+
+2. Check segment status:
+   ```python
+   segments = info.segments
+   unoptimized = [s for s in segments if s.segment_type != "indexed"]
+   print(f"Unoptimized segments: {len(unoptimized)}")
+   ```
+
+**Solutions:**
+- Reduce `ef` for faster (less accurate) search
+- Increase `indexing_threshold` to force optimization
+- Enable quantization
+- Index filter fields
+
+### Low Recall
+
+**Symptoms:** Search results are not relevant
+
+**Solutions:**
+1. Increase `ef`:
+   ```python
+   search_params={"hnsw_ef": 256}  # From 128
+   ```
+
+2. Increase `ef_construct` and rebuild:
+   ```python
+   client.update_collection(
+       collection_name="products",
+       hnsw_config={"ef_construct": 200}
+   )
+   ```
+
+3. Increase `m`:
+   ```json
+   {"hnsw_config": {"m": 32}}  // From 16
+   ```
+
+4. Use exact search for comparison:
+   ```python
+   results = client.search(
+       collection_name="products",
+       query_vector=embedding,
+       limit=10,
+       search_params={"exact": True}  # Brute force
+   )
+   ```
+
+### High Memory Usage
+
+See [Memory Optimization](/advanced/memory-optimization) guide.
+
+## References
+
+- HNSW Configuration: `lib/segment/src/index/hnsw_index/config.rs`
+- Optimizer Configuration: `lib/collection/src/optimizers_builder.rs`
+- Search Implementation: `lib/segment/src/index/hnsw_index/`
+- Query Optimization: `lib/segment/src/index/query_optimization/`

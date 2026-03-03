@@ -1,0 +1,148 @@
+---
+title: Recover Current Peer
+api: POST /cluster/recover
+---
+
+Initiates a snapshot-based recovery process for the current peer in the cluster.
+
+## Description
+
+This endpoint requests a Raft snapshot from the cluster leader to recover the current peer's state. This is useful when:
+
+- A peer has fallen significantly behind and needs to catch up quickly
+- Data corruption has occurred and the peer needs to resynchronize
+- The consensus log (WAL) has grown too large
+
+<Warning>
+  This is a cluster management operation that requires administrative privileges. It triggers a consensus operation that will be applied across the cluster.
+</Warning>
+
+## How It Works
+
+1. The request is sent to the consensus system via `ConsensusOperations::request_snapshot()`
+2. The cluster leader generates a snapshot of the current state
+3. The snapshot is transferred to the requesting peer
+4. The peer applies the snapshot, replacing its local state
+5. The consensus WAL is cleared and the peer continues from the snapshot index
+
+## Authorization
+
+Requires global `manage` access level.
+
+## Response
+
+<ResponseField name="result" type="boolean">
+  Returns `true` when the snapshot request has been successfully queued
+</ResponseField>
+
+```json
+{
+  "result": true,
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+<Note>
+  A successful response means the request was accepted, not that recovery has completed. Monitor the cluster status to track recovery progress.
+</Note>
+
+## Error Responses
+
+<ResponseExample>
+```json 403 Forbidden
+{
+  "status": {
+    "error": "Forbidden: Insufficient access rights"
+  },
+  "time": 0.0
+}
+```
+
+```json 400 Bad Request
+{
+  "status": {
+    "error": "Distributed mode disabled"
+  },
+  "time": 0.0
+}
+```
+</ResponseExample>
+
+## Use Cases
+
+### Fast Recovery
+When a peer has been offline and accumulated thousands of operations in the WAL, applying a snapshot is much faster than replaying all operations.
+
+### State Corruption
+If a peer's local state becomes corrupted or inconsistent, requesting a fresh snapshot ensures it matches the cluster state.
+
+### WAL Cleanup
+If the consensus WAL has grown excessively large, recovery via snapshot helps reset it to a manageable size.
+
+## Implementation Details
+
+The recovery mechanism is implemented in:
+- `lib/storage/src/content_manager/toc/mod.rs:488` - Request snapshot function
+- `lib/storage/src/content_manager/consensus_manager.rs` - Consensus snapshot handling
+- `lib/storage/src/content_manager/snapshots/recover.rs` - Snapshot recovery logic
+
+## Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:6333/cluster/recover \
+  -H "api-key: your-api-key"
+```
+
+```python Python
+from qdrant_client import QdrantClient
+
+client = QdrantClient(
+    url="http://localhost:6333",
+    api_key="your-api-key"
+)
+
+# Request snapshot recovery
+result = client.post("/cluster/recover")
+print(f"Recovery requested: {result}")
+```
+
+```typescript TypeScript
+import { QdrantClient } from "@qdrant/js-client-rest";
+
+const client = new QdrantClient({ 
+  url: "http://localhost:6333",
+  apiKey: "your-api-key"
+});
+
+await client.api("cluster").recoverCurrentPeer();
+```
+</CodeGroup>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="When to use recovery">
+    - Peer has been offline for an extended period
+    - WAL replay would take longer than snapshot transfer
+    - After resolving data corruption issues
+    - When troubleshooting consensus problems
+  </Accordion>
+  
+  <Accordion title="Monitor recovery progress">
+    Use the `/cluster` endpoint to monitor:
+    - `pending_operations` - Should decrease to 0
+    - `consensus_thread_status` - Should show "working"
+    - Peer's commit index approaching the leader's
+  </Accordion>
+  
+  <Accordion title="Recovery mode considerations">
+    If Qdrant was started with the `--recovery-mode` flag, this endpoint can still be used to request snapshots, but the node will remain in read-only mode.
+  </Accordion>
+</AccordionGroup>
+
+## Related Endpoints
+
+- [Cluster Status](/api/cluster/status) - Monitor recovery progress
+- [Remove Peer](/api/cluster/peers) - Remove unhealthy peers from cluster

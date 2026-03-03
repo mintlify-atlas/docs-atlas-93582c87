@@ -1,0 +1,525 @@
+---
+title: Kubernetes Deployment
+description: Deploy Qdrant on Kubernetes using Helm
+---
+
+Deploy Qdrant on Kubernetes for production-grade orchestration, auto-scaling, and high availability.
+
+## Prerequisites
+
+- Kubernetes cluster (1.19+)
+- `kubectl` configured
+- Helm 3 installed
+- Storage class available for persistent volumes
+
+## Helm Chart
+
+The official Qdrant Helm chart is available at [github.com/qdrant/qdrant-helm](https://github.com/qdrant/qdrant-helm).
+
+### Add Helm Repository
+
+```bash
+helm repo add qdrant https://qdrant.github.io/qdrant-helm
+helm repo update
+```
+
+### Install Qdrant
+
+#### Single Node Deployment
+
+```bash
+helm install qdrant qdrant/qdrant
+```
+
+#### Production Deployment with Custom Values
+
+Create a `values.yaml` file:
+
+```yaml
+replicaCount: 3
+
+image:
+  repository: qdrant/qdrant
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: LoadBalancer
+  httpPort: 6333
+  grpcPort: 6334
+
+persistence:
+  enabled: true
+  size: 50Gi
+  storageClass: "standard"
+  accessModes:
+    - ReadWriteOnce
+
+resources:
+  limits:
+    cpu: 4000m
+    memory: 8Gi
+  requests:
+    cpu: 2000m
+    memory: 4Gi
+
+config:
+  cluster:
+    enabled: true
+  service:
+    api_key: "your-secret-api-key"
+    grpc_port: 6334
+  log_level: "INFO"
+
+security:
+  apiKey:
+    enabled: true
+    existingSecret: "qdrant-api-key"
+    secretKey: "api-key"
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+```
+
+Install with custom values:
+
+```bash
+helm install qdrant qdrant/qdrant -f values.yaml
+```
+
+### Upgrade Deployment
+
+```bash
+helm upgrade qdrant qdrant/qdrant -f values.yaml
+```
+
+### Uninstall
+
+```bash
+helm uninstall qdrant
+```
+
+## Manual Kubernetes Deployment
+
+If you prefer to deploy without Helm, use these manifest files.
+
+### Create Namespace
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: qdrant
+```
+
+```bash
+kubectl apply -f namespace.yaml
+```
+
+### ConfigMap
+
+Create `qdrant-config.yaml`:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: qdrant-config
+  namespace: qdrant
+data:
+  config.yaml: |
+    log_level: INFO
+    service:
+      host: 0.0.0.0
+      http_port: 6333
+      grpc_port: 6334
+      enable_cors: true
+    storage:
+      storage_path: /qdrant/storage
+      snapshots_path: /qdrant/snapshots
+      on_disk_payload: true
+    cluster:
+      enabled: true
+      p2p:
+        port: 6335
+```
+
+### Secret for API Key
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: qdrant-api-key
+  namespace: qdrant
+type: Opaque
+stringData:
+  api-key: your-secret-api-key-here
+```
+
+```bash
+kubectl apply -f secret.yaml
+```
+
+### StatefulSet
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+  namespace: qdrant
+spec:
+  serviceName: qdrant-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: qdrant
+  template:
+    metadata:
+      labels:
+        app: qdrant
+    spec:
+      securityContext:
+        fsGroup: 2000
+        runAsUser: 1000
+        runAsNonRoot: true
+      containers:
+      - name: qdrant
+        image: qdrant/qdrant:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 6333
+          name: http
+          protocol: TCP
+        - containerPort: 6334
+          name: grpc
+          protocol: TCP
+        - containerPort: 6335
+          name: p2p
+          protocol: TCP
+        env:
+        - name: QDRANT__SERVICE__API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: qdrant-api-key
+              key: api-key
+        - name: QDRANT__CLUSTER__ENABLED
+          value: "true"
+        - name: QDRANT__CLUSTER__P2P__PORT
+          value: "6335"
+        volumeMounts:
+        - name: qdrant-storage
+          mountPath: /qdrant/storage
+        - name: qdrant-snapshots
+          mountPath: /qdrant/snapshots
+        resources:
+          requests:
+            cpu: 2000m
+            memory: 4Gi
+          limits:
+            cpu: 4000m
+            memory: 8Gi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 6333
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 6333
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+  volumeClaimTemplates:
+  - metadata:
+      name: qdrant-storage
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "standard"
+      resources:
+        requests:
+          storage: 50Gi
+  - metadata:
+      name: qdrant-snapshots
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: "standard"
+      resources:
+        requests:
+          storage: 10Gi
+```
+
+### Headless Service
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant-headless
+  namespace: qdrant
+spec:
+  clusterIP: None
+  selector:
+    app: qdrant
+  ports:
+  - name: http
+    port: 6333
+    targetPort: 6333
+  - name: grpc
+    port: 6334
+    targetPort: 6334
+  - name: p2p
+    port: 6335
+    targetPort: 6335
+```
+
+### LoadBalancer Service
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+  namespace: qdrant
+spec:
+  type: LoadBalancer
+  selector:
+    app: qdrant
+  ports:
+  - name: http
+    port: 6333
+    targetPort: 6333
+    protocol: TCP
+  - name: grpc
+    port: 6334
+    targetPort: 6334
+    protocol: TCP
+```
+
+### Apply Manifests
+
+```bash
+kubectl apply -f qdrant-config.yaml
+kubectl apply -f secret.yaml
+kubectl apply -f statefulset.yaml
+kubectl apply -f headless-service.yaml
+kubectl apply -f service.yaml
+```
+
+## Horizontal Pod Autoscaler
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: qdrant-hpa
+  namespace: qdrant
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: qdrant
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+```
+
+## Ingress
+
+### NGINX Ingress
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: qdrant-ingress
+  namespace: qdrant
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - qdrant.example.com
+    secretName: qdrant-tls
+  rules:
+  - host: qdrant.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: qdrant
+            port:
+              number: 6333
+```
+
+## Monitoring
+
+### ServiceMonitor for Prometheus
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: qdrant
+  namespace: qdrant
+spec:
+  selector:
+    matchLabels:
+      app: qdrant
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+```
+
+## Persistent Volume Claims
+
+Qdrant requires persistent storage for data durability.
+
+### Storage Classes
+
+Recommended storage classes by cloud provider:
+
+| Provider | Storage Class | Type |
+|----------|---------------|------|
+| AWS | `gp3` | SSD |
+| GCP | `pd-ssd` | SSD |
+| Azure | `managed-premium` | SSD |
+| Local | `local-path` | Local |
+
+### PVC Example
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-storage
+  namespace: qdrant
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 100Gi
+```
+
+## Health Checks
+
+Qdrant provides health check endpoints:
+
+- `/` - Basic health check
+- `/readyz` - Readiness probe
+- `/healthz` - Liveness probe
+- `/metrics` - Prometheus metrics
+
+## Backup and Recovery
+
+### Create Snapshot CronJob
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: qdrant-backup
+  namespace: qdrant
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: curlimages/curl:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              curl -X POST "http://qdrant:6333/collections/my_collection/snapshots" \
+                -H "api-key: $API_KEY"
+            env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: qdrant-api-key
+                  key: api-key
+          restartPolicy: OnFailure
+```
+
+## Troubleshooting
+
+### Check Pod Status
+
+```bash
+kubectl get pods -n qdrant
+kubectl describe pod qdrant-0 -n qdrant
+kubectl logs qdrant-0 -n qdrant
+```
+
+### Check Persistent Volumes
+
+```bash
+kubectl get pvc -n qdrant
+kubectl get pv
+```
+
+### Test Connectivity
+
+```bash
+kubectl run -it --rm debug --image=curlimages/curl --restart=Never -n qdrant -- \
+  curl http://qdrant:6333/
+```
+
+### Access from Local Machine
+
+```bash
+kubectl port-forward -n qdrant svc/qdrant 6333:6333
+```
+
+Then access at `http://localhost:6333`.
+
+## Best Practices
+
+1. **Use StatefulSet** for stable network identities and persistent storage
+2. **Enable clustering** for high availability (3+ replicas)
+3. **Set resource limits** to prevent resource exhaustion
+4. **Use secrets** for API keys and sensitive configuration
+5. **Configure health checks** for automatic pod recovery
+6. **Use persistent volumes** for data durability
+7. **Enable monitoring** with Prometheus metrics
+8. **Set up backups** using snapshot CronJobs
+9. **Use ingress with TLS** for secure external access
+10. **Run as non-root** user for better security
+
+## Next Steps
+
+- [Cluster Setup Guide](/deployment/cluster-setup)
+- [Configuration Reference](/deployment/configuration)
+- [Security Guide](/deployment/security)

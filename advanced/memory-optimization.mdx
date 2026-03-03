@@ -1,0 +1,656 @@
+---
+title: Memory Optimization
+description: Optimize memory usage with mmap, on-disk storage, and intelligent caching strategies
+---
+
+Qdrant provides multiple strategies to optimize memory usage, from keeping everything in RAM for maximum speed to storing data on disk for minimal memory footprint.
+
+## Memory Architecture
+
+### Storage Layers
+
+Qdrant uses a tiered storage architecture:
+
+```
+┌─────────────────────────────────────┐
+│           RAM (Fastest)             │
+│  - Vector storage (in-memory)       │
+│  - Payload index                    │  
+│  - HNSW graph links                 │
+└─────────────────────────────────────┘
+           ↕ (configurable)
+┌─────────────────────────────────────┐
+│      Memory-Mapped (mmap)           │
+│  - Vector storage (on-disk)         │
+│  - Quantized vectors                │
+│  - Large segments                   │
+└─────────────────────────────────────┘
+           ↕ (always)
+┌─────────────────────────────────────┐
+│         Disk (Persistent)           │
+│  - WAL logs                         │
+│  - Snapshots                        │
+│  - Archived data                    │
+└─────────────────────────────────────┘
+```
+
+### Vector Storage Types
+
+Implementations in `lib/segment/src/vector_storage/vector_storage_base.rs:256`:
+
+```rust
+pub enum VectorStorageEnum {
+    // In-memory variants (fast, high RAM usage)
+    DenseSimple(Box<SimpleDenseVectorStorage>),
+    DenseVolatile(Box<VolatileDenseVectorStorage>),
+    
+    // Memory-mapped variants (slower, low RAM usage)
+    DenseMemmap(Box<MemmapDenseVectorStorage>),
+    DenseAppendableMemmap(Box<AppendableMmapDenseVectorStorage>),
+    
+    // Byte-precision variants (4x less memory)
+    DenseMemmapByte(Box<MemmapDenseVectorStorage<VectorElementTypeByte>>),
+    
+    // Half-precision variants (2x less memory)  
+    DenseMemmapHalf(Box<MemmapDenseVectorStorage<VectorElementTypeHalf>>),
+    // ...
+}
+```
+
+## Configuration Strategies
+
+### 1. High-Performance Configuration (Maximum RAM)
+
+Optimized for speed, minimal latency:
+
+```json
+{
+  "vectors": {
+    "size": 768,
+    "distance": "Cosine",
+    "on_disk": false,  // Keep vectors in RAM
+    "datatype": "float32",
+    "hnsw_config": {
+      "m": 16,
+      "ef_construct": 100
+    },
+    "quantization_config": {
+      "scalar": {
+        "type": "int8",
+        "always_ram": true  // Keep quantized in RAM
+      }
+    }
+  },
+  "optimizers_config": {
+    "memmap_threshold": 0,  // Disable mmap
+    "indexing_threshold": 20000
+  },
+  "on_disk_payload": false  // Payload in RAM
+}
+```
+
+**Memory usage:** ~1 GB per 100K vectors (768-dim)
+- Original vectors: ~300 MB
+- Quantized vectors: ~75 MB (int8)
+- HNSW graph: ~400 MB (M=16)
+- Payload: ~200 MB (typical)
+
+### 2. Balanced Configuration (Hybrid)
+
+Balance between speed and memory:
+
+```json
+{
+  "vectors": {
+    "size": 768,
+    "distance": "Cosine",
+    "on_disk": false,  // Vectors in RAM for search
+    "datatype": "float32",
+    "quantization_config": {
+      "scalar": {
+        "type": "int8",
+        "always_ram": false  // Quantized on disk
+      }
+    }
+  },
+  "optimizers_config": {
+    "memmap_threshold": 50000,  // Use mmap for segments >50MB
+    "indexing_threshold": 10000
+  },
+  "on_disk_payload": true  // Payload on disk
+}
+```
+
+**Memory usage:** ~400 MB per 100K vectors (768-dim)
+- Original vectors: ~300 MB
+- Quantized vectors: mmap (minimal RAM)
+- HNSW graph: ~100 MB (sparse in RAM)
+- Payload: mmap (minimal RAM)
+
+### 3. Minimal Memory Configuration (Maximum Disk)
+
+Optimized for large datasets, minimal RAM:
+
+```json
+{
+  "vectors": {
+    "size": 768,
+    "distance": "Cosine",
+    "on_disk": true,  // Vectors on disk (mmap)
+    "datatype": "uint8",  // Use byte precision
+    "quantization_config": {
+      "binary": {
+        "encoding": "one_bit",
+        "always_ram": false
+      }
+    }
+  },
+  "optimizers_config": {
+    "memmap_threshold": 0,  // Always use mmap
+    "indexing_threshold": 10000
+  },
+  "on_disk_payload": true
+}
+```
+
+**Memory usage:** ~50-100 MB per 100K vectors (768-dim)
+- Vectors: mmap (~25 MB resident)
+- Quantized: mmap (~10 MB resident)  
+- HNSW graph: ~30 MB (metadata only)
+- Payload: mmap (~10 MB resident)
+
+## Memory-Mapped Storage (mmap)
+
+### How mmap Works
+
+Memory mapping (`lib/segment/src/vector_storage/dense/memmap_dense_vector_storage.rs`) allows accessing disk files as if they were in memory:
+
+```rust
+pub struct MemmapDenseVectorStorage<T: PrimitiveVectorElement> {
+    num_vectors: usize,
+    dim: usize,
+    mmap: Option<Mmap>,  // Memory-mapped file
+    // ...
+}
+```
+
+**Benefits:**
+- OS handles paging automatically
+- Only recently accessed data stays in RAM
+- Transparent to application code
+
+**Trade-offs:**
+- First access is slower (disk read)
+- Subsequent accesses are fast (cached in RAM)
+- Memory usage grows with working set
+
+### Controlling mmap Behavior
+
+#### Populate Cache
+
+Pre-load vectors into RAM (`lib/segment/src/vector_storage/vector_storage_base.rs:460`):
+
+```rust
+pub fn populate(&self) -> OperationResult<()> {
+    match self {
+        VectorStorageEnum::DenseMemmap(vs) => vs.populate(),
+        VectorStorageEnum::DenseAppendableMemmap(vs) => vs.populate()?,
+        // ...
+    }
+}
+```
+
+**Use case:** Warm up cache before serving traffic
+
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient("localhost", port=6333)
+
+# Trigger population (internal operation)
+# Qdrant automatically populates on startup for critical segments
+```
+
+#### Clear Cache
+
+Free memory by clearing OS cache (`lib/segment/src/vector_storage/vector_storage_base.rs:501`):
+
+```rust
+pub fn clear_cache(&self) -> OperationResult<()> {
+    match self {
+        VectorStorageEnum::DenseMemmap(vs) => vs.clear_cache()?,
+        VectorStorageEnum::DenseAppendableMemmap(vs) => vs.clear_cache()?,
+        // ...
+    }
+}
+```
+
+**Use case:** Free memory during maintenance windows
+
+### mmap Threshold Configuration
+
+Control when segments switch to mmap (`lib/collection/src/optimizers_builder.rs:63`):
+
+```rust
+pub memmap_threshold: Option<usize>  // Size in KB
+```
+
+**Configuration:**
+```json
+{
+  "optimizers_config": {
+    "memmap_threshold": 100000  // 100 MB threshold
+  }
+}
+```
+
+**Guidelines:**
+- 0: Always use mmap (minimal RAM)
+- 10000-50000: Balanced (10-50 MB threshold)
+- null: Never use mmap (maximum RAM)
+
+## Payload Storage Optimization
+
+### Storage Modes
+
+1. **In-Memory (InMemory)** - Full payload in RAM
+2. **In-Memory with mmap backup (InRamMmap)** - RAM with disk backup
+3. **On-Disk (Mmap)** - Payload stored on disk
+
+**Configuration:**
+```json
+{
+  "on_disk_payload": true  // Use Mmap mode
+}
+```
+
+**Implementation** (`lib/collection/src/config.rs:142`):
+
+```rust
+pub fn payload_storage_type(&self) -> PayloadStorageType {
+    if self.on_disk_payload {
+        PayloadStorageType::Mmap
+    } else if feature_flags().payload_storage_skip_rocksdb {
+        PayloadStorageType::InRamMmap  
+    } else {
+        PayloadStorageType::InMemory
+    }
+}
+```
+
+### Indexed Fields
+
+Indexed payload fields stay in RAM regardless of `on_disk_payload` setting:
+
+```python
+client.create_payload_index(
+    collection_name="products",
+    field_name="category",
+    field_schema="keyword"  # Kept in RAM for fast filtering
+)
+```
+
+**Memory impact:**
+- String index: ~40-100 bytes per unique value
+- Integer index: ~8 bytes per value
+- Geo index: ~24 bytes per point
+
+## Segment Size Optimization
+
+### Max Segment Size
+
+Control maximum segment size to balance memory and indexing time (`lib/collection/src/optimizers_builder.rs:54`):
+
+```rust
+pub max_segment_size: Option<usize>  // Size in KB
+```
+
+**Default calculation:**
+```rust
+const DEFAULT_MAX_SEGMENT_PER_CPU_KB: usize = 256_000;  // 256 MB per CPU
+
+pub fn get_max_segment_size_in_kilobytes(&self, num_indexing_threads: usize) -> usize {
+    if let Some(max_segment_size) = self.max_segment_size {
+        max_segment_size
+    } else {
+        num_indexing_threads.saturating_mul(DEFAULT_MAX_SEGMENT_PER_CPU_KB)
+    }
+}
+```
+
+**Configuration:**
+```json
+{
+  "optimizers_config": {
+    "max_segment_size": 200000  // 200 MB max segments
+  }
+}
+```
+
+**Trade-offs:**
+- **Smaller segments** (50-100 MB):
+  - ✅ Less memory per segment
+  - ✅ Faster indexing iterations
+  - ⚠️ More segments total (slower search)
+  
+- **Larger segments** (500 MB - 1 GB):
+  - ✅ Fewer segments (faster search)
+  - ⚠️ More memory per segment
+  - ⚠️ Slower indexing iterations
+
+### Segment Number
+
+Target number of segments (`lib/collection/src/optimizers_builder.rs:112`):
+
+```rust
+pub fn get_number_segments(&self) -> usize {
+    if self.default_segment_number == 0 {
+        let num_cpus = common::cpu::get_num_cpus();
+        let expected_segments = num_cpus / 2;
+        expected_segments.clamp(2, 8)  // 2-8 segments
+    } else {
+        self.default_segment_number
+    }
+}
+```
+
+**Configuration:**
+```json
+{
+  "optimizers_config": {
+    "default_segment_number": 4  // Target 4 segments
+  }
+}
+```
+
+**Guidelines:**
+- Set to number of search threads (typically CPU count / 2)
+- More segments = better parallelism, more memory overhead
+- Fewer segments = less overhead, limited parallelism
+
+## Vector Precision Optimization
+
+### Float32 (Default)
+
+**Memory:** 4 bytes per dimension
+```json
+{"datatype": "float32"}  // or omit (default)
+```
+
+### Float16 (Half Precision)
+
+**Memory:** 2 bytes per dimension (50% reduction)
+```json
+{"datatype": "float16"}
+```
+
+**Use cases:**
+- Modern embeddings (OpenAI, Cohere) work well with FP16
+- 2x memory reduction with minimal accuracy loss (less than 1% recall drop)
+
+### UInt8 (Byte Precision)
+
+**Memory:** 1 byte per dimension (75% reduction)
+```json
+{"datatype": "uint8"}
+```
+
+**Requirements:**
+- Vectors must be in range [0, 255]
+- Pre-quantized embeddings
+- Use with rescoring for accuracy
+
+## WAL (Write-Ahead Log) Optimization
+
+### WAL Configuration
+
+```json
+{
+  "wal_config": {
+    "wal_capacity_mb": 32,      // Size of each WAL segment
+    "wal_segments_ahead": 0,    // Pre-allocated segments
+    "wal_retain_closed": 1      // Keep 1 closed segment
+  }
+}
+```
+
+**Memory impact:**
+```
+WAL Memory = wal_capacity_mb * (1 + wal_segments_ahead + wal_retain_closed)
+           = 32 MB * (1 + 0 + 1) = 64 MB (typical)
+```
+
+**Tuning:**
+- **High write rate:** Increase `wal_capacity_mb` and `wal_segments_ahead`
+- **Low write rate:** Use defaults to minimize memory
+- **Recovery tolerance:** Increase `wal_retain_closed` for better durability
+
+## Monitoring Memory Usage
+
+### System-Level Monitoring
+
+```bash
+# Total memory usage
+docker stats qdrant
+
+# Detailed breakdown
+docker exec qdrant cat /proc/self/status | grep -i mem
+
+# mmap usage
+cat /proc/$(pgrep qdrant)/maps | wc -l  # Number of mmap regions
+```
+
+### Collection-Level Statistics
+
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient("localhost", port=6333)
+
+# Get collection info
+info = client.get_collection("my_collection")
+
+print(f"Vectors: {info.vectors_count}")
+print(f"Points: {info.points_count}")  
+print(f"Segments: {len(info.segments)}")
+
+# Estimate memory
+vector_size = info.config.params.vectors.size
+vector_count = info.vectors_count
+
+if info.config.params.vectors.datatype == "float32":
+    bytes_per_vector = vector_size * 4
+elif info.config.params.vectors.datatype == "float16":
+    bytes_per_vector = vector_size * 2
+else:  # uint8
+    bytes_per_vector = vector_size
+
+estimated_mb = (vector_count * bytes_per_vector) / (1024 * 1024)
+print(f"Estimated vector storage: {estimated_mb:.2f} MB")
+```
+
+### Profiling Memory
+
+```bash
+# Use valgrind for detailed analysis (development only)
+valgrind --tool=massif --massif-out-file=massif.out ./qdrant
+
+# Analyze results
+ms_print massif.out
+```
+
+## Best Practices
+
+### 1. Start with Default Configuration
+
+Let Qdrant auto-configure based on your system:
+```json
+{
+  "optimizers_config": {
+    "default_segment_number": 0,  // Auto
+    "max_segment_size": null,     // Auto
+    "memmap_threshold": null      // Auto
+  }
+}
+```
+
+### 2. Enable on_disk for Large Collections
+
+For >1M vectors:
+```json
+{
+  "vectors": {"on_disk": true},
+  "on_disk_payload": true
+}
+```
+
+### 3. Use Quantization for Memory Reduction
+
+Combine storage optimization with quantization:
+```json
+{
+  "vectors": {
+    "on_disk": true,
+    "quantization_config": {
+      "scalar": {"type": "int8"}
+    }
+  }
+}
+```
+
+### 4. Tune Segment Size for Your Workload
+
+**High write throughput:**
+```json
+{"max_segment_size": 100000}  // Smaller segments, faster merges
+```
+
+**Read-heavy workload:**  
+```json
+{"max_segment_size": 500000}  // Larger segments, fewer files
+```
+
+### 5. Monitor and Adjust
+
+```python
+# Check if memory is growing
+import time
+import psutil
+
+process = psutil.Process()  # Qdrant process
+
+for i in range(10):
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    print(f"Memory: {mem_mb:.2f} MB")
+    time.sleep(60)
+```
+
+## Troubleshooting
+
+### High Memory Usage
+
+**Symptoms:** Memory usage grows over time
+
+**Solutions:**
+1. Enable mmap:
+   ```json
+   {"memmap_threshold": 50000}
+   ```
+
+2. Use on-disk storage:
+   ```json
+   {"on_disk": true}
+   ```
+
+3. Reduce segment size:
+   ```json
+   {"max_segment_size": 100000}
+   ```
+
+4. Enable quantization:
+   ```json
+   {"quantization_config": {"scalar": {"type": "int8"}}}
+   ```
+
+### Slow First Query
+
+**Symptoms:** First search is slow, subsequent searches are fast
+
+**Cause:** Cold mmap cache
+
+**Solutions:**
+1. Warm up cache on startup (automatic for critical data)
+
+2. Use more RAM storage:
+   ```json
+   {"memmap_threshold": 200000}  // Increase threshold
+   ```
+
+3. Increase system cache:
+   ```bash
+   # Linux: Increase vm.vfs_cache_pressure
+   sudo sysctl -w vm.vfs_cache_pressure=50  # Default is 100
+   ```
+
+### Out of Memory Errors
+
+**Error:** `Cannot allocate memory`
+
+**Solutions:**
+1. Reduce RAM usage:
+   ```json
+   {
+     "vectors": {"on_disk": true},
+     "on_disk_payload": true,
+     "optimizers_config": {"memmap_threshold": 0}
+   }
+   ```
+
+2. Use lower precision:
+   ```json
+   {"datatype": "float16"}  // or "uint8"
+   ```
+
+3. Increase system swap (emergency fallback):
+   ```bash
+   sudo fallocate -l 8G /swapfile
+   sudo chmod 600 /swapfile
+   sudo mkswap /swapfile
+   sudo swapon /swapfile
+   ```
+
+## Advanced Techniques
+
+### Custom Memory Mapping
+
+For advanced users, modify mmap behavior:
+
+```rust
+// lib/segment/src/vector_storage/dense/memmap_dense_vector_storage.rs
+use memmap2::MmapOptions;
+
+let mmap = unsafe {
+    MmapOptions::new()
+        .populate()  // Pre-fault pages
+        .map(&file)?
+};
+```
+
+### Huge Pages
+
+Enable huge pages for better performance:
+
+```bash
+# Allocate 1000 huge pages (2MB each = 2GB)
+sudo sysctl -w vm.nr_hugepages=1000
+
+# Verify
+cat /proc/meminfo | grep Huge
+```
+
+## References
+
+- Vector Storage: `lib/segment/src/vector_storage/vector_storage_base.rs`
+- Mmap Implementation: `lib/segment/src/vector_storage/dense/memmap_dense_vector_storage.rs`  
+- Optimizer Configuration: `lib/collection/src/optimizers_builder.rs`
+- Segment Configuration: `lib/collection/src/config.rs`

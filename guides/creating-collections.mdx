@@ -1,0 +1,207 @@
+---
+title: Creating Collections
+description: Learn how to create and configure collections in Qdrant
+---
+
+A collection is the primary container for storing vectors and their associated payloads in Qdrant. Before you can upload data, you must create a collection with the appropriate vector configuration.
+
+## Basic Collection Creation
+
+Create a simple collection with a single vector configuration:
+
+<Steps>
+  <Step title="Define vector parameters">
+    Decide on your vector dimensions and distance metric. Common metrics are:
+    - `Cosine` - for normalized vectors (most common)
+    - `Dot` - for dot product similarity
+    - `Euclid` - for Euclidean distance
+    - `Manhattan` - for Manhattan distance
+  </Step>
+
+  <Step title="Create the collection">
+    ```bash
+    curl -X PUT http://localhost:6333/collections/my_collection \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "vectors": {
+          "size": 384,
+          "distance": "Cosine"
+        }
+      }'
+    ```
+
+    **Response:**
+    ```json
+    {
+      "result": true,
+      "status": "ok",
+      "time": 0.031
+    }
+    ```
+  </Step>
+
+  <Step title="Verify collection exists">
+    ```bash
+    curl http://localhost:6333/collections/my_collection
+    ```
+
+    You'll receive detailed collection information including configuration and statistics.
+  </Step>
+</Steps>
+
+## Named Vectors Configuration
+
+For multi-vector scenarios (e.g., text + image embeddings), use named vectors:
+
+```bash
+curl -X PUT http://localhost:6333/collections/multimodal \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "text": {
+        "size": 768,
+        "distance": "Cosine"
+      },
+      "image": {
+        "size": 512,
+        "distance": "Dot"
+      }
+    }
+  }'
+```
+
+## Advanced Configuration
+
+### On-Disk Storage
+
+Reduce memory usage by storing vectors on disk:
+
+```bash
+curl -X PUT http://localhost:6333/collections/large_collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 1536,
+      "distance": "Cosine",
+      "on_disk": true
+    }
+  }'
+```
+
+### HNSW Index Configuration
+
+Tune the HNSW (Hierarchical Navigable Small World) index for your use case:
+
+```bash
+curl -X PUT http://localhost:6333/collections/optimized \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "hnsw_config": {
+      "m": 16,
+      "ef_construct": 100,
+      "full_scan_threshold": 10000
+    }
+  }'
+```
+
+**Parameters:**
+- `m` - Number of edges per node (default: 16). Higher = better quality, more memory
+- `ef_construct` - Construction time search depth (default: 100). Higher = better index quality, slower indexing
+- `full_scan_threshold` - Segment size below which full scan is used instead of index
+
+### Sharding Configuration
+
+Distribute data across multiple shards:
+
+```bash
+curl -X PUT http://localhost:6333/collections/distributed \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "shard_number": 4,
+    "replication_factor": 2
+  }'
+```
+
+## Multi-Vector Configuration
+
+For ColBERT-style multi-vector representations:
+
+```bash
+curl -X PUT http://localhost:6333/collections/colbert \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 128,
+      "distance": "Cosine",
+      "multivector_config": {
+        "comparator": "max_sim"
+      }
+    }
+  }'
+```
+
+## Wait for Operation Completion
+
+By default, collection creation is asynchronous. Use the `wait` parameter to wait for completion:
+
+```bash
+curl -X PUT "http://localhost:6333/collections/my_collection?wait=true" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    }
+  }'
+```
+
+## Checking Collection Existence
+
+Quickly check if a collection exists without fetching full details:
+
+```bash
+curl http://localhost:6333/collections/my_collection/exists
+```
+
+**Response:**
+```json
+{
+  "result": {
+    "exists": true
+  },
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+## Performance Tips
+
+<Note>
+**Memory vs Speed Trade-offs:**
+- Use `on_disk: true` for large collections that don't fit in RAM
+- Increase `m` in HNSW config for better recall at the cost of memory
+- Set `ef_construct` to at least 2x your target `ef` search parameter
+- For collections under 10k vectors, consider increasing `full_scan_threshold`
+</Note>
+
+<Warning>
+**Collection Names:**
+- Must start with a letter or underscore
+- Can contain letters, digits, underscores, and hyphens
+- Maximum length: 255 characters
+</Warning>
+
+## Next Steps
+
+Now that you've created a collection, you can:
+- [Upload data](/guides/uploading-data) to populate it with vectors
+- [Create payload indexes](/guides/payload-indexing) for faster filtering
+- [Configure quantization](/guides/quantization) to reduce memory usage

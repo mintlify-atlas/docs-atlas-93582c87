@@ -1,0 +1,153 @@
+---
+title: Delete Points
+api: POST /collections/{name}/points/delete
+---
+
+Delete points from a collection by ID, filter, or both.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection to delete points from
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="wait" type="boolean" default="true">
+  Whether to wait for the operation to be applied to all replicas
+</ParamField>
+
+<ParamField query="ordering" type="string" default="weak">
+  Write ordering guarantees: `weak`, `medium`, or `strong`
+</ParamField>
+
+## Request Body
+
+<ParamField body="points" type="array">
+  Array of point IDs to delete
+</ParamField>
+
+<ParamField body="filter" type="object">
+  Filter conditions to select points for deletion. Only points matching the filter will be deleted.
+  
+  <Expandable title="Filter Object">
+    <ParamField body="must" type="array">
+      All conditions must match
+    </ParamField>
+    
+    <ParamField body="should" type="array">
+      At least one condition must match
+    </ParamField>
+    
+    <ParamField body="must_not" type="array">
+      None of the conditions must match
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  <Expandable title="Update Result">
+    <ResponseField name="operation_id" type="integer">
+      Sequential number of the operation
+    </ResponseField>
+    
+    <ResponseField name="status" type="string">
+      Operation status: `acknowledged` or `completed`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok` or `error`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Delete by IDs
+
+```json
+{
+  "points": [1, 2, 3, 4]
+}
+```
+
+### Delete by Filter
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "city",
+        "match": {
+          "value": "Berlin"
+        }
+      }
+    ]
+  }
+}
+```
+
+### Delete by IDs and Filter
+
+Delete specific IDs only if they match the filter:
+
+```json
+{
+  "points": [1, 2, 3],
+  "filter": {
+    "must": [
+      {
+        "key": "price",
+        "range": {
+          "lt": 10.0
+        }
+      }
+    ]
+  }
+}
+```
+
+### Delete with Multiple Conditions
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "category",
+        "match": {
+          "value": "electronics"
+        }
+      }
+    ],
+    "must_not": [
+      {
+        "key": "in_stock",
+        "match": {
+          "value": true
+        }
+      }
+    ]
+  }
+}
+```
+
+### Response Example
+
+```json
+{
+  "result": {
+    "operation_id": 124,
+    "status": "completed"
+  },
+  "status": "ok",
+  "time": 0.015
+}
+```

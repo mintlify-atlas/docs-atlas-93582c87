@@ -1,122 +1,194 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Qdrant",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#7C3AED",
+    "light": "#A78BFA",
+    "dark": "#5B21B6"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/qdrant/qdrant"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/qdrant/qdrant"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/vectors",
+              "concepts/collections",
+              "concepts/points",
+              "concepts/search",
+              "concepts/filtering",
+              "concepts/indexing"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Guides",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/creating-collections",
+              "guides/uploading-data",
+              "guides/searching",
+              "guides/filtering-data",
+              "guides/payload-indexing",
+              "guides/snapshots",
+              "guides/quantization",
+              "guides/sparse-vectors",
+              "guides/hybrid-search"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Deployment",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "deployment/overview",
+              "deployment/docker",
+              "deployment/kubernetes",
+              "deployment/cluster-setup",
+              "deployment/configuration",
+              "deployment/security"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/monitoring",
+              "operations/backup-restore",
+              "operations/scaling",
+              "operations/performance-tuning",
+              "operations/troubleshooting"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Overview",
             "pages": [
-              "api-reference/introduction"
+              "api/overview",
+              "api/authentication"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Collections",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/collections/list",
+              "api/collections/create",
+              "api/collections/get",
+              "api/collections/update",
+              "api/collections/delete",
+              "api/collections/aliases"
+            ]
+          },
+          {
+            "group": "Points",
+            "pages": [
+              "api/points/upsert",
+              "api/points/get",
+              "api/points/delete",
+              "api/points/search",
+              "api/points/recommend",
+              "api/points/discover",
+              "api/points/query",
+              "api/points/scroll",
+              "api/points/count"
+            ]
+          },
+          {
+            "group": "Payload",
+            "pages": [
+              "api/payload/set",
+              "api/payload/overwrite",
+              "api/payload/delete",
+              "api/payload/clear"
+            ]
+          },
+          {
+            "group": "Indexing",
+            "pages": [
+              "api/indexing/create",
+              "api/indexing/delete"
+            ]
+          },
+          {
+            "group": "Snapshots",
+            "pages": [
+              "api/snapshots/create",
+              "api/snapshots/list",
+              "api/snapshots/delete",
+              "api/snapshots/recover"
+            ]
+          },
+          {
+            "group": "Cluster",
+            "pages": [
+              "api/cluster/status",
+              "api/cluster/recovery"
+            ]
+          },
+          {
+            "group": "Service",
+            "pages": [
+              "api/service/health",
+              "api/service/metrics",
+              "api/service/telemetry"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Advanced",
+        "groups": [
+          {
+            "group": "Architecture",
+            "pages": [
+              "advanced/architecture-overview",
+              "advanced/storage-engine",
+              "advanced/vector-indexing",
+              "advanced/distributed-deployment"
+            ]
+          },
+          {
+            "group": "Optimization",
+            "pages": [
+              "advanced/quantization-methods",
+              "advanced/gpu-acceleration",
+              "advanced/memory-optimization",
+              "advanced/query-optimization"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/sharding",
+              "advanced/replication",
+              "advanced/multi-tenancy",
+              "advanced/rbac",
+              "advanced/audit-logging"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

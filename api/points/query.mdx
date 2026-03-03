@@ -1,0 +1,271 @@
+---
+title: Query Points
+api: POST /collections/{name}/points/query
+---
+
+Universal query endpoint supporting multiple query types including vector search, recommendations, discovery, and hybrid queries with fusion.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection to query
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="consistency" type="string">
+  Read consistency level
+</ParamField>
+
+## Request Body
+
+<ParamField body="query" type="object">
+  Query definition. Can be one of:
+  
+  <Expandable title="Query Types">
+    **Nearest** - Find nearest neighbors to a vector
+    ```json
+    {"nearest": [0.1, 0.2, 0.3]}
+    ```
+    
+    **Recommend** - Recommendation based on examples
+    ```json
+    {"recommend": {"positive": [1, 2], "negative": [3]}}
+    ```
+    
+    **Discover** - Discovery with context
+    ```json
+    {"discover": {"target": 1, "context": [{"positive": 2, "negative": 3}]}}
+    ```
+    
+    **Order By** - Order by payload field
+    ```json
+    {"order_by": "price"}
+    ```
+    
+    **Fusion** - Combine prefetch results using RRF or DBSF
+    ```json
+    {"fusion": "rrf"}
+    ```
+  </Expandable>
+</ParamField>
+
+<ParamField body="prefetch" type="array">
+  Array of sub-queries to perform first. The main query will operate on the results of prefetches.
+  Enables multi-stage retrieval and fusion.
+</ParamField>
+
+<ParamField body="using" type="string">
+  Name of the vector to use for querying (for named vectors)
+</ParamField>
+
+<ParamField body="filter" type="object">
+  Filter conditions to narrow down the search space
+</ParamField>
+
+<ParamField body="params" type="object">
+  Search parameters
+  
+  <Expandable title="Search Params">
+    <ParamField body="hnsw_ef" type="integer">
+      HNSW ef parameter for search
+    </ParamField>
+    
+    <ParamField body="exact" type="boolean" default="false">
+      Whether to perform exact search
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="score_threshold" type="number">
+  Minimum score threshold
+</ParamField>
+
+<ParamField body="limit" type="integer" default="10">
+  Maximum number of results
+</ParamField>
+
+<ParamField body="offset" type="integer" default="0">
+  Number of results to skip
+</ParamField>
+
+<ParamField body="with_payload" type="boolean | array | object" default="false">
+  Select which payload fields to return
+</ParamField>
+
+<ParamField body="with_vector" type="boolean | array" default="false">
+  Whether to return vector data
+</ParamField>
+
+<ParamField body="lookup_from" type="object">
+  Look for point IDs in another collection
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  <Expandable title="Query Response">
+    <ResponseField name="points" type="array">
+      Array of scored points matching the query
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok` or `error`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Simple Vector Query
+
+```json
+{
+  "query": {
+    "nearest": [0.2, 0.1, 0.9, 0.7]
+  },
+  "limit": 5,
+  "with_payload": true
+}
+```
+
+### Recommendation Query
+
+```json
+{
+  "query": {
+    "recommend": {
+      "positive": [1, 2, 3],
+      "negative": [10],
+      "strategy": "best_score"
+    }
+  },
+  "limit": 10,
+  "filter": {
+    "must": [
+      {"key": "category", "match": {"value": "electronics"}}
+    ]
+  }
+}
+```
+
+### Fusion Query with RRF
+
+Combine multiple searches using Reciprocal Rank Fusion:
+
+```json
+{
+  "prefetch": [
+    {
+      "query": {"nearest": [0.1, 0.2, 0.3, 0.4]},
+      "using": "image",
+      "limit": 100
+    },
+    {
+      "query": {"nearest": [0.5, 0.6, 0.7, 0.8]},
+      "using": "text",
+      "limit": 100
+    }
+  ],
+  "query": {
+    "fusion": "rrf"
+  },
+  "limit": 10
+}
+```
+
+### Order By Query
+
+```json
+{
+  "query": {
+    "order_by": {
+      "key": "price",
+      "direction": "asc"
+    }
+  },
+  "filter": {
+    "must": [
+      {"key": "in_stock", "match": {"value": true}}
+    ]
+  },
+  "limit": 20
+}
+```
+
+### Multi-Stage Query
+
+Prefetch candidates, then refine:
+
+```json
+{
+  "prefetch": [
+    {
+      "query": {"nearest": [0.1, 0.2, 0.3, 0.4]},
+      "limit": 1000,
+      "filter": {
+        "must": [{"key": "category", "match": {"value": "books"}}]
+      }
+    }
+  ],
+  "query": {
+    "nearest": [0.5, 0.6, 0.7, 0.8]
+  },
+  "using": "description",
+  "limit": 10,
+  "with_payload": true
+}
+```
+
+### Discovery Query
+
+```json
+{
+  "query": {
+    "discover": {
+      "target": 100,
+      "context": [
+        {"positive": 10, "negative": 20},
+        {"positive": 30, "negative": 40}
+      ]
+    }
+  },
+  "limit": 5,
+  "with_payload": ["title", "author"]
+}
+```
+
+### Response Example
+
+```json
+{
+  "result": {
+    "points": [
+      {
+        "id": 1,
+        "version": 3,
+        "score": 0.95,
+        "payload": {
+          "title": "Best Match",
+          "category": "electronics"
+        }
+      },
+      {
+        "id": 5,
+        "version": 1,
+        "score": 0.87,
+        "payload": {
+          "title": "Second Match",
+          "category": "electronics"
+        }
+      }
+    ]
+  },
+  "status": "ok",
+  "time": 0.012
+}
+```

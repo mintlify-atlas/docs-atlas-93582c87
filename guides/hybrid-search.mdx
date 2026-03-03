@@ -1,0 +1,510 @@
+---
+title: Hybrid Search
+description: Combine dense and sparse vectors for superior search quality
+---
+
+Hybrid search combines multiple retrieval methods to achieve better results than any single method alone. The most common approach combines dense semantic vectors with sparse keyword vectors.
+
+## Why Hybrid Search?
+
+Different search methods have complementary strengths:
+
+| Method | Strengths | Weaknesses |
+|--------|-----------|------------|
+| **Dense Vectors** | Semantic understanding, handles synonyms, conceptual matching | Miss exact keywords, struggles with rare terms |
+| **Sparse Vectors (BM25)** | Exact keyword matching, handles rare terms, interpretable | No semantic understanding, sensitive to exact words |
+| **Hybrid** | Best of both worlds | More complex setup |
+
+**Example:**
+- Query: "apple fruit nutrition"
+- Dense: Finds documents about "nutritional value of apples" (semantic)
+- Sparse: Finds documents with exact terms "apple", "fruit", "nutrition" (keywords)
+- Hybrid: Combines both for best results
+
+## Setting Up Hybrid Search
+
+### Create Collection with Multiple Vectors
+
+<Steps>
+  <Step title="Configure both vector types">
+    ```bash
+    curl -X PUT http://localhost:6333/collections/products \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "vectors": {
+          "dense": {
+            "size": 384,
+            "distance": "Cosine"
+          },
+          "sparse": {
+            "modifier": "idf"
+          }
+        },
+        "sparse_vectors": {
+          "sparse": {}
+        }
+      }'
+    ```
+  </Step>
+
+  <Step title="Upload points with both vectors">
+    ```bash
+    curl -X PUT http://localhost:6333/collections/products/points \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "points": [
+          {
+            "id": 1,
+            "vector": {
+              "dense": [0.12, 0.45, 0.67, ...],
+              "sparse": {
+                "indices": [10, 25, 77, 155],
+                "values": [0.42, 0.85, 0.31, 0.67]
+              }
+            },
+            "payload": {
+              "title": "iPhone 15 Pro",
+              "category": "electronics"
+            }
+          }
+        ]
+      }'
+    ```
+  </Step>
+
+  <Step title="Perform hybrid search">
+    Use the query API with prefetch to combine results:
+    ```bash
+    curl -X POST http://localhost:6333/collections/products/points/query \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "prefetch": [
+          {
+            "query": [0.12, 0.45, 0.67, ...],
+            "using": "dense",
+            "limit": 20
+          },
+          {
+            "query": {
+              "indices": [10, 25, 77],
+              "values": [0.42, 0.85, 0.31]
+            },
+            "using": "sparse",
+            "limit": 20
+          }
+        ],
+        "query": {
+          "fusion": "rrf"
+        },
+        "limit": 10
+      }'
+    ```
+  </Step>
+</Steps>
+
+## Fusion Methods
+
+### Reciprocal Rank Fusion (RRF)
+
+Combines rankings from multiple searches using reciprocal ranks:
+
+```bash
+curl -X POST http://localhost:6333/collections/products/points/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prefetch": [
+      {"query": [0.1, 0.2, ...], "using": "dense", "limit": 20},
+      {"query": {"indices": [1,2,3], "values": [0.5,0.3,0.2]}, "using": "sparse", "limit": 20}
+    ],
+    "query": {
+      "fusion": "rrf"
+    },
+    "limit": 10
+  }'
+```
+
+**How RRF works:**
+```
+RRF_score(doc) = Σ 1/(k + rank_i(doc))
+```
+
+Where:
+- `k` is a constant (default: 60)
+- `rank_i(doc)` is the rank of the document in the i-th result set
+- Sum is over all result sets where the document appears
+
+**Benefits:**
+- No need to normalize scores from different methods
+- Robust to score distribution differences
+- Proven effective in many domains
+
+### Weighted Average Fusion
+
+Combines scores with custom weights:
+
+```bash
+curl -X POST http://localhost:6333/collections/products/points/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prefetch": [
+      {"query": [0.1, 0.2, ...], "using": "dense", "limit": 100},
+      {"query": {"indices": [1,2,3], "values": [0.5,0.3,0.2]}, "using": "sparse", "limit": 100}
+    ],
+    "query": {
+      "fusion": "weighted",
+      "weights": [0.7, 0.3]
+    },
+    "limit": 10
+  }'
+```
+
+**Weights:**
+- Sum should equal 1.0
+- `[0.7, 0.3]` = 70% dense, 30% sparse
+- `[0.5, 0.5]` = equal weight
+- Tune based on your use case
+
+<Note>
+**Weight Tuning Tips:**
+- Start with equal weights `[0.5, 0.5]`
+- Increase dense weight for semantic/conceptual queries
+- Increase sparse weight for exact keyword matching
+- A/B test different weights on real queries
+</Note>
+
+## Advanced Hybrid Patterns
+
+### Three-Way Hybrid
+
+Combine dense, sparse, and another signal (e.g., popularity):
+
+```bash
+curl -X POST http://localhost:6333/collections/products/points/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prefetch": [
+      {
+        "query": [0.1, 0.2, ...],
+        "using": "dense",
+        "limit": 50
+      },
+      {
+        "query": {"indices": [1,2,3], "values": [0.5,0.3,0.2]},
+        "using": "sparse",
+        "limit": 50
+      },
+      {
+        "query": {
+          "order_by": "popularity"
+        },
+        "limit": 50
+      }
+    ],
+    "query": {
+      "fusion": "weighted",
+      "weights": [0.5, 0.3, 0.2]
+    },
+    "limit": 10
+  }'
+```
+
+### Filtered Hybrid Search
+
+Apply filters to hybrid results:
+
+```bash
+curl -X POST http://localhost:6333/collections/products/points/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prefetch": [
+      {
+        "query": [0.1, 0.2, ...],
+        "using": "dense",
+        "limit": 50,
+        "filter": {
+          "must": [
+            {"key": "in_stock", "match": {"value": true}}
+          ]
+        }
+      },
+      {
+        "query": {"indices": [1,2,3], "values": [0.5,0.3,0.2]},
+        "using": "sparse",
+        "limit": 50,
+        "filter": {
+          "must": [
+            {"key": "in_stock", "match": {"value": true}}
+          ]
+        }
+      }
+    ],
+    "query": {
+      "fusion": "rrf"
+    },
+    "filter": {
+      "must": [
+        {"key": "category", "match": {"value": "electronics"}}
+      ]
+    },
+    "limit": 10
+  }'
+```
+
+### Multi-Stage Hybrid
+
+Use different retrieval stages:
+
+```bash
+curl -X POST http://localhost:6333/collections/products/points/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prefetch": [
+      {
+        "prefetch": [
+          {"query": [0.1, 0.2, ...], "using": "dense", "limit": 100},
+          {"query": {"indices": [1,2,3], "values": [0.5,0.3,0.2]}, "using": "sparse", "limit": 100}
+        ],
+        "query": {
+          "fusion": "rrf"
+        },
+        "limit": 50
+      }
+    ],
+    "query": {
+      "rescore": true
+    },
+    "limit": 10
+  }'
+```
+
+## BM25 + Dense Embeddings
+
+The most common hybrid setup uses BM25 (sparse) + semantic embeddings (dense):
+
+```bash
+# 1. Create collection with BM25 auto-generation
+curl -X PUT http://localhost:6333/collections/documents \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "semantic": {
+        "size": 384,
+        "distance": "Cosine"
+      },
+      "bm25": {
+        "modifier": "idf",
+        "inference": {
+          "model": "qdrant/bm25",
+          "options": {
+            "tokenizer": "word",
+            "lowercase": true
+          }
+        }
+      }
+    },
+    "sparse_vectors": {
+      "bm25": {}
+    }
+  }'
+
+# 2. Upload with text and embeddings
+curl -X PUT http://localhost:6333/collections/documents/points \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [
+      {
+        "id": 1,
+        "vector": {
+          "semantic": [0.1, 0.2, 0.3, ...],
+          "bm25": {
+            "text": "Machine learning is transforming industries"
+          }
+        },
+        "payload": {
+          "title": "ML Overview"
+        }
+      }
+    ]
+  }'
+
+# 3. Search with hybrid query
+curl -X POST http://localhost:6333/collections/documents/points/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prefetch": [
+      {
+        "query": [0.15, 0.25, 0.35, ...],
+        "using": "semantic",
+        "limit": 20
+      },
+      {
+        "query": {
+          "text": "machine learning"
+        },
+        "using": "bm25",
+        "limit": 20
+      }
+    ],
+    "query": {
+      "fusion": "rrf"
+    },
+    "limit": 10
+  }'
+```
+
+## Performance Optimization
+
+<Steps>
+  <Step title="Adjust prefetch limits">
+    Larger prefetch limits improve recall but slow down search:
+    - Start with 20-50 for each method
+    - Increase to 100+ if you need better recall
+    - Monitor query latency as you adjust
+  </Step>
+
+  <Step title="Use appropriate fusion method">
+    - **RRF**: Best default choice, no tuning needed
+    - **Weighted**: Use when you know which method should dominate
+  </Step>
+
+  <Step title="Enable quantization">
+    Reduce memory and increase speed for dense vectors:
+    ```json
+    {
+      "quantization_config": {
+        "scalar": {
+          "type": "int8",
+          "quantile": 0.99,
+          "always_ram": true
+        }
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Create payload indexes">
+    If using filters, create indexes on filtered fields:
+    ```bash
+    curl -X PUT http://localhost:6333/collections/products/index \
+      -H 'Content-Type: application/json' \
+      -d '{"field_name": "category", "field_schema": "keyword"}'
+    ```
+  </Step>
+
+  <Step title="Tune HNSW parameters">
+    For dense vector search optimization:
+    ```json
+    {
+      "hnsw_config": {
+        "m": 16,
+        "ef_construct": 100
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Evaluation and Tuning
+
+To find the best hybrid configuration:
+
+<Steps>
+  <Step title="Collect test queries">
+    Gather 50-100 representative queries from your application.
+  </Step>
+
+  <Step title="Create ground truth">
+    For each query, identify the truly relevant results.
+  </Step>
+
+  <Step title="Test different configurations">
+    Try various:
+    - Fusion methods (RRF vs weighted)
+    - Weight combinations (if using weighted)
+    - Prefetch limits
+    - Filter strategies
+  </Step>
+
+  <Step title="Measure metrics">
+    Track:
+    - **Recall@K**: How many relevant results in top K
+    - **MRR**: Mean Reciprocal Rank of first relevant result  
+    - **NDCG**: Normalized Discounted Cumulative Gain
+    - **Latency**: Query response time
+  </Step>
+
+  <Step title="Choose best configuration">
+    Select the configuration that balances quality and performance for your use case.
+  </Step>
+</Steps>
+
+## Common Patterns by Use Case
+
+### E-commerce Search
+
+```json
+{
+  "prefetch": [
+    {"query": "<product_embedding>", "using": "semantic", "limit": 30},
+    {"query": "<bm25_query>", "using": "bm25", "limit": 30}
+  ],
+  "query": {"fusion": "rrf"},
+  "filter": {"must": [{"key": "in_stock", "match": {"value": true}}]},
+  "limit": 20
+}
+```
+
+### Document Search
+
+```json
+{
+  "prefetch": [
+    {"query": "<semantic_embedding>", "using": "semantic", "limit": 50},
+    {"query": "<bm25_query>", "using": "bm25", "limit": 50}
+  ],
+  "query": {"fusion": "weighted", "weights": [0.6, 0.4]},
+  "limit": 10
+}
+```
+
+### FAQ Matching
+
+```json
+{
+  "prefetch": [
+    {"query": "<question_embedding>", "using": "semantic", "limit": 20},
+    {"query": "<bm25_query>", "using": "keywords", "limit": 10}
+  ],
+  "query": {"fusion": "weighted", "weights": [0.8, 0.2]},
+  "limit": 5
+}
+```
+
+## Troubleshooting
+
+<Warning>
+**Poor Results:**
+If hybrid search underperforms:
+1. Test each method individually to identify which is failing
+2. Check if both vectors are properly normalized
+3. Verify fusion weights are appropriate
+4. Increase prefetch limits
+5. Ensure filters aren't too restrictive
+</Warning>
+
+<Warning>
+**Slow Queries:**
+If hybrid search is too slow:
+1. Reduce prefetch limits
+2. Enable quantization for dense vectors
+3. Create indexes for filtered fields
+4. Consider using `on_disk` storage for less-used vectors
+5. Optimize HNSW parameters
+</Warning>
+
+## Next Steps
+
+- Learn more about [sparse vectors](/guides/sparse-vectors) configuration
+- Explore [filtering](/guides/filtering-data) to refine results
+- Set up [quantization](/guides/quantization) for better performance
+- Review [payload indexing](/guides/payload-indexing) for faster filters

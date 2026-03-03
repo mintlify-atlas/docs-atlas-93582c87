@@ -1,0 +1,132 @@
+---
+title: 'Qdrant - Vector Search Engine'
+description: 'High-performance vector database for building next-generation AI applications with extended filtering, hybrid search, and distributed deployment'
+---
+
+# Vector Search Engine for the Next Generation of AI
+
+Qdrant (read: quadrant) is a vector similarity search engine and vector database. It provides a production-ready service with a convenient API to store, search, and manage points—vectors with an additional payload. Qdrant is tailored to extended filtering support, making it useful for all sorts of neural-network or semantic-based matching, faceted search, and other applications.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get your first vector search running in under 5 minutes with Docker
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Deploy Qdrant with Docker, Kubernetes, binaries, or managed cloud
+  </Card>
+  <Card title="API Reference" icon="code" href="https://api.qdrant.tech/" target="_blank">
+    Explore the complete OpenAPI 3.0 REST and gRPC documentation
+  </Card>
+  <Card title="Client Libraries" icon="puzzle-piece" href="#client-libraries">
+    Official SDKs for Python, JavaScript, Rust, Go, Java, and .NET
+  </Card>
+</CardGroup>
+
+## Why Qdrant?
+
+**Written in Rust** - Qdrant is built with Rust, making it fast and reliable even under high load. See our [benchmarks](https://qdrant.tech/benchmarks/) for performance comparisons.
+
+**Production-Ready** - With features like write-ahead logging, SIMD hardware acceleration, and async I/O using `io_uring`, Qdrant is designed for demanding production workloads.
+
+**Extended Filtering** - Attach JSON payloads to vectors and filter based on keyword matching, full-text search, numerical ranges, geo-locations, and more. Combine conditions with `should`, `must`, and `must_not` clauses to implement any business logic.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Hybrid Search" icon="magnifying-glass">
+    Combine dense and sparse vectors for keyword-aware semantic search. Sparse vectors generalize BM25/TF-IDF with transformer-based token weighting.
+  </Card>
+  <Card title="Quantization & Storage" icon="database">
+    Reduce RAM usage by up to 97% with built-in vector quantization. Dynamically balance speed vs precision with on-disk storage options.
+  </Card>
+  <Card title="Distributed Deployment" icon="network-wired">
+    Scale horizontally with sharding and replication. Zero-downtime rolling updates and seamless dynamic scaling.
+  </Card>
+  <Card title="Advanced Indexing" icon="bolt">
+    HNSW indexes with query planning, payload indexes, and SIMD acceleration for x86-x64 and ARM Neon architectures.
+  </Card>
+</CardGroup>
+
+## Client Libraries
+
+Qdrant offers official client libraries to integrate seamlessly into your application stack:
+
+- **[Python](https://github.com/qdrant/qdrant-client)** - Full-featured client with in-memory and disk persistence modes
+- **[JavaScript/TypeScript](https://github.com/qdrant/qdrant-js)** - Browser and Node.js support
+- **[Rust](https://github.com/qdrant/rust-client)** - Native Rust client
+- **[Go](https://github.com/qdrant/go-client)** - Go client library
+- **[Java](https://github.com/qdrant/java-client)** - Java client
+- **[.NET/C#](https://github.com/qdrant/qdrant-dotnet)** - .NET client
+
+### Python Quick Example
+
+```python
+from qdrant_client import QdrantClient
+
+# In-memory instance for testing
+qdrant = QdrantClient(":memory:")
+
+# Or persist to disk for prototyping
+client = QdrantClient(path="path/to/db")
+
+# Connect to server
+client = QdrantClient("http://localhost:6333")
+```
+
+## Popular Integrations
+
+Qdrant integrates with leading AI frameworks and tools:
+
+<CardGroup cols={2}>
+  <Card title="LangChain" icon="link">
+    Use Qdrant as a memory backend for LangChain applications
+  </Card>
+  <Card title="LlamaIndex" icon="book">
+    Vector store integration for LlamaIndex RAG pipelines
+  </Card>
+  <Card title="Haystack" icon="search">
+    Document store for Haystack NLP applications
+  </Card>
+  <Card title="OpenAI ChatGPT" icon="robot">
+    Memory backend for ChatGPT retrieval plugin
+  </Card>
+</CardGroup>
+
+<Note>
+Qdrant is also available as a fully managed **[Qdrant Cloud](https://cloud.qdrant.io/)** service with a free tier to get started.
+</Note>
+
+## Use Cases
+
+**Semantic Search** - Transform text, images, or other data into vectors and find semantically similar items beyond keyword matching.
+
+**Recommendation Systems** - Build powerful recommendation engines using neural network embeddings with custom filtering logic.
+
+**RAG Applications** - Store and retrieve relevant context for retrieval-augmented generation with LLMs.
+
+**Anomaly Detection** - Identify outliers and unusual patterns in high-dimensional data.
+
+**Image & Video Search** - Enable visual search capabilities by indexing image and video embeddings.
+
+## Architecture Highlights
+
+- **HNSW Indexing** - Hierarchical Navigable Small World graphs for fast approximate nearest neighbor search (m=16, ef_construct=100)
+- **Write-Ahead Logging** - Ensures data persistence with 32MB WAL segments
+- **Optimizers** - Automatic segment optimization with configurable thresholds (20% deleted threshold, 1000 min vectors)
+- **Storage Flexibility** - On-disk payload storage to save RAM while maintaining fast retrieval
+- **Performance Tuning** - Configurable search threads, CPU budgets, and concurrent collection loads
+
+<Tip>
+Qdrant exposes metrics on `/metrics` endpoint in Prometheus format for easy monitoring integration.
+</Tip>
+
+## Community & Support
+
+- **[Discord Community](https://qdrant.to/discord)** - Join thousands of developers building with Qdrant
+- **[GitHub Discussions](https://github.com/qdrant/qdrant)** - Ask questions and share feedback
+- **[Twitter](https://qdrant.to/twitter)** - Follow @qdrant_engine for updates
+- **[Newsletter](https://qdrant.tech/subscribe/)** - Stay informed about new releases
+
+## License
+
+Qdrant is licensed under the Apache License, Version 2.0. Open source and production-ready.

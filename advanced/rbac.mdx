@@ -1,0 +1,454 @@
+---
+title: Role-Based Access Control (RBAC)
+description: Secure your Qdrant deployment with fine-grained access control
+---
+
+Qdrant's RBAC system provides fine-grained access control through API keys and JWT tokens. Control who can read, write, or manage collections and cluster resources.
+
+## Access Levels
+
+Qdrant defines three access modes:
+
+### Global Access
+
+<ParamField path="access" type="string">
+  Global access level across all collections
+  - `r` - Read-only access to all collections
+  - `m` - Manage access (full control)
+</ParamField>
+
+### Collection Access
+
+<ParamField path="access" type="string">
+  Collection-specific access level
+  - `r` - Read-only access
+  - `rw` - Read and write access (collection management excluded)
+  - `prw` - Points read/write (excludes snapshots and indexes)
+</ParamField>
+
+## Authentication Methods
+
+Qdrant supports multiple authentication mechanisms:
+
+### API Keys
+
+Simple static API keys for service authentication:
+
+```yaml
+# config/production.yaml
+service:
+  api_key: "your-secret-api-key-here"
+```
+
+Client usage:
+
+```bash
+curl -X GET 'http://localhost:6333/collections' \
+  -H 'api-key: your-secret-api-key-here'
+```
+
+### JWT Tokens
+
+JWT-based authentication for dynamic access control:
+
+```yaml
+# config/production.yaml
+service:
+  jwt_rbac: true
+  jwt_secret: "your-jwt-secret"
+```
+
+Token payload:
+
+```json
+{
+  "sub": "user@example.com",
+  "exp": 1735689600,
+  "access": {
+    "global": "r",
+    "collections": [
+      {
+        "collection": "documents",
+        "access": "rw"
+      },
+      {
+        "collection": "embeddings",
+        "access": "r"
+      }
+    ]
+  }
+}
+```
+
+## Access Configuration
+
+### Global Read-Only Access
+
+Grant read-only access to all collections:
+
+```json
+{
+  "access": "r"
+}
+```
+
+Permitted operations:
+- `GET /collections`
+- `GET /collections/{name}`
+- `POST /collections/{name}/points/search`
+- `POST /collections/{name}/points/scroll`
+- `POST /collections/{name}/points/query`
+
+### Global Manage Access
+
+Full administrative access:
+
+```json
+{
+  "access": "m"
+}
+```
+
+Permitted operations:
+- All read operations
+- Collection creation/deletion
+- Cluster management
+- Shard operations
+- Snapshot operations
+
+### Collection-Scoped Access
+
+Restrict access to specific collections:
+
+```json
+{
+  "access": [
+    {
+      "collection": "customer_data",
+      "access": "rw"
+    },
+    {
+      "collection": "analytics",
+      "access": "r"
+    }
+  ]
+}
+```
+
+## Access Requirements
+
+Different operations require different access levels:
+
+### Read Operations
+
+Requires: Collection read (`r`, `rw`, or `prw`) access
+
+```http
+POST /collections/documents/points/search
+```
+
+```http
+GET /collections/documents/points/{id}
+```
+
+### Write Operations
+
+Requires: Collection write (`rw` or `prw`) access
+
+```http
+PUT /collections/documents/points
+```
+
+```http
+DELETE /collections/documents/points/{id}
+```
+
+### Management Operations
+
+Requires: Global manage (`m`) access
+
+```http
+PUT /collections/new_collection
+```
+
+```http
+DELETE /collections/documents
+```
+
+### Extra Operations
+
+Requires: Collection `rw` access (excludes `prw`)
+
+```http
+POST /collections/documents/snapshots
+```
+
+```http
+PUT /collections/documents/index
+```
+
+<Note>
+The `prw` (points read/write) access mode allows point operations but denies snapshot and index management.
+</Note>
+
+## JWT Integration
+
+### Token Generation
+
+Generate JWT tokens with proper claims:
+
+```python
+import jwt
+import time
+
+payload = {
+    "sub": "api_user",
+    "exp": int(time.time()) + 3600,  # 1 hour
+    "access": [
+        {
+            "collection": "documents",
+            "access": "rw"
+        }
+    ]
+}
+
+token = jwt.encode(payload, "your-jwt-secret", algorithm="HS256")
+```
+
+### Token Usage
+
+```bash
+curl -X POST 'http://localhost:6333/collections/documents/points/search' \
+  -H 'Authorization: Bearer eyJhbGc...' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.1, 0.2, 0.3],
+    "limit": 10
+  }'
+```
+
+### Token Validation
+
+Qdrant validates:
+- Signature using configured `jwt_secret`
+- Expiration (`exp` claim)
+- Access permissions for requested operation
+
+## Access Control Implementation
+
+The RBAC system checks access at multiple layers:
+
+### Request Layer
+
+Authentication happens before request processing:
+
+```rust
+// lib/storage/src/rbac/auth.rs:68
+pub fn check_collection_access(
+    &self,
+    collection_name: &str,
+    requirements: AccessRequirements,
+    method: &str,
+) -> Result<CollectionPass, StorageError>
+```
+
+### Collection Layer
+
+Each collection operation checks required access:
+
+```rust
+// Access requirements
+pub struct AccessRequirements {
+    pub write: bool,    // Requires write access
+    pub manage: bool,   // Requires manage access
+    pub extras: bool,   // Requires extra features access
+}
+```
+
+### Operation Mapping
+
+| Operation | Write | Manage | Extras |
+|-----------|-------|--------|--------|
+| Search | ✗ | ✗ | ✗ |
+| Get point | ✗ | ✗ | ✗ |
+| Insert point | ✓ | ✗ | ✗ |
+| Delete point | ✓ | ✗ | ✗ |
+| Create index | ✓ | ✗ | ✓ |
+| Create snapshot | ✓ | ✗ | ✓ |
+| Create collection | ✓ | ✓ | ✗ |
+| Delete collection | ✓ | ✓ | ✗ |
+
+## Common Access Patterns
+
+### Application Service Account
+
+Read/write access to specific collections:
+
+```json
+{
+  "sub": "app_service",
+  "access": [
+    {"collection": "users", "access": "rw"},
+    {"collection": "products", "access": "rw"},
+    {"collection": "analytics", "access": "r"}
+  ]
+}
+```
+
+### Analytics Service
+
+Read-only access across all collections:
+
+```json
+{
+  "sub": "analytics_service",
+  "access": "r"
+}
+```
+
+### Admin User
+
+Full management access:
+
+```json
+{
+  "sub": "admin@company.com",
+  "access": "m"
+}
+```
+
+### Customer Portal
+
+Limited point operations only:
+
+```json
+{
+  "sub": "customer_portal",
+  "access": [
+    {"collection": "customer_docs", "access": "prw"}
+  ]
+}
+```
+
+## Multi-Tenancy with RBAC
+
+Combine RBAC with shard keys for tenant isolation:
+
+```json
+{
+  "sub": "tenant_acme",
+  "access": [
+    {
+      "collection": "multi_tenant_docs",
+      "access": "rw",
+      "shard_key": "acme_corp"
+    }
+  ]
+}
+```
+
+<Note>
+Shard key restrictions in RBAC tokens are available in Qdrant Cloud and Enterprise editions.
+</Note>
+
+## Security Best Practices
+
+### API Key Security
+
+1. **Rotate regularly**: Change API keys quarterly
+2. **Use environment variables**: Never hardcode keys
+3. **Limit scope**: Create separate keys per service
+4. **Monitor usage**: Track API key usage patterns
+
+```yaml
+# Use environment variable
+service:
+  api_key: ${QDRANT_API_KEY}
+```
+
+### JWT Security
+
+1. **Short expiration**: Use 1-hour token lifetime
+2. **Strong secrets**: Use 256-bit random secrets
+3. **Secure transmission**: Always use HTTPS
+4. **Validate strictly**: Check all claims
+
+```python
+# Generate strong secret
+import secrets
+secret = secrets.token_urlsafe(32)
+```
+
+### Network Security
+
+1. **TLS/SSL**: Always enable HTTPS in production
+2. **Firewall rules**: Restrict access to Qdrant ports
+3. **VPC**: Deploy within private network
+4. **Reverse proxy**: Use nginx/Envoy for additional security
+
+```yaml
+# Enable TLS
+service:
+  enable_tls: true
+  tls_cert: /path/to/cert.pem
+  tls_key: /path/to/key.pem
+```
+
+## Error Handling
+
+### Authentication Failures
+
+```http
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{
+  "status": {
+    "error": "Authentication required"
+  },
+  "time": 0.001
+}
+```
+
+### Authorization Failures
+
+```http
+HTTP/1.1 403 Forbidden
+```
+
+```json
+{
+  "status": {
+    "error": "Write access to collection 'documents' is required"
+  },
+  "time": 0.001
+}
+```
+
+## Audit Integration
+
+RBAC integrates with audit logging to track access:
+
+```json
+{
+  "timestamp": "2026-03-03T10:15:30Z",
+  "method": "search",
+  "auth_type": "jwt",
+  "subject": "user@example.com",
+  "collection": "documents",
+  "result": "ok"
+}
+```
+
+See [Audit Logging](/advanced/audit-logging) for details.
+
+## Source Code References
+
+Key implementation files:
+
+- `lib/storage/src/rbac/mod.rs:28` - Access level definitions
+- `lib/storage/src/rbac/auth.rs:14` - Auth context and checking
+- `lib/storage/src/rbac/mod.rs:261` - Access requirements structure
+- `lib/storage/src/rbac/mod.rs:84` - Global access modes
+- `lib/storage/src/rbac/mod.rs:95` - Collection access modes

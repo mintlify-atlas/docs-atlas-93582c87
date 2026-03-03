@@ -1,0 +1,188 @@
+---
+title: API Overview
+description: Introduction to the Qdrant REST and gRPC APIs
+---
+
+Qdrant provides two API protocols for interacting with the vector database: a REST API and a gRPC API. Both APIs provide full access to all Qdrant functionality.
+
+## API Protocols
+
+### REST API
+
+The REST API is the primary interface for most users. It uses standard HTTP methods and JSON payloads.
+
+**Base URL Format:**
+```
+http://<host>:<port>
+```
+
+**Default Configuration:**
+- **Host:** `localhost` or `0.0.0.0`
+- **Port:** `6333` (HTTP)
+- **Protocol:** HTTP/HTTPS
+
+**Example Base URL:**
+```
+http://localhost:6333
+```
+
+### gRPC API
+
+The gRPC API provides a high-performance alternative with binary protocol support, ideal for high-throughput scenarios and language-specific client libraries.
+
+**Default Configuration:**
+- **Host:** Same as REST API
+- **Port:** `6334` (gRPC)
+- **Protocol:** gRPC over HTTP/2
+
+**Example Endpoint:**
+```
+localhost:6334
+```
+
+## Port Configuration
+
+Both API ports can be customized via environment variables or configuration files:
+
+**Environment Variables:**
+```bash
+# REST API port (default: 6333)
+export QDRANT__SERVICE__HTTP_PORT=6333
+
+# gRPC API port (default: 6334)
+export QDRANT__SERVICE__GRPC_PORT=6334
+```
+
+**Configuration File** (`config/config.yaml`):
+```yaml
+service:
+  host: 0.0.0.0
+  http_port: 6333
+  grpc_port: 6334
+```
+
+<Note>
+Setting `grpc_port` to `null` or omitting it will disable the gRPC API entirely.
+</Note>
+
+## API Structure
+
+The REST API is organized into several main endpoints:
+
+### Core Endpoints
+
+| Endpoint | Purpose | Source Reference |
+|----------|---------|------------------|
+| `/collections` | Collection management | `src/actix/api/collections_api.rs` |
+| `/collections/{name}/points` | Point operations (CRUD) | `src/actix/api/update_api.rs` |
+| `/collections/{name}/points/search` | Vector search | `src/actix/api/search_api.rs` |
+| `/collections/{name}/points/query` | Universal query API | `src/actix/api/query_api.rs` |
+| `/collections/{name}/points/recommend` | Recommendation API | `src/actix/api/recommend_api.rs` |
+| `/collections/{name}/points/discover` | Discovery search | `src/actix/api/discovery_api.rs` |
+| `/collections/{name}/snapshots` | Snapshot management | `src/actix/api/snapshot_api.rs` |
+| `/cluster` | Cluster management | `src/actix/api/cluster_api.rs` |
+| `/` | Service info | `src/actix/api/service_api.rs` |
+
+### Health & Monitoring
+
+| Endpoint | Purpose |
+|----------|--------|
+| `/` | Health check and version info |
+| `/healthz` | Kubernetes-style health check |
+| `/readyz` | Readiness probe |
+| `/metrics` | Prometheus metrics |
+
+## Request Format
+
+All REST API requests use standard HTTP methods:
+
+- **GET** - Retrieve resources
+- **POST** - Create resources or execute operations
+- **PUT** - Update resources
+- **PATCH** - Partial updates
+- **DELETE** - Remove resources
+
+**Content Type:**
+```
+Content-Type: application/json
+```
+
+## Response Format
+
+All successful REST API responses follow this structure:
+
+```json
+{
+  "result": { /* response data */ },
+  "status": "ok",
+  "time": 0.001234
+}
+```
+
+**Fields:**
+- `result` - The actual response data
+- `status` - Either `"ok"` for success or `"error"` for failures
+- `time` - Request processing time in seconds
+
+**Error Response:**
+```json
+{
+  "status": {
+    "error": "Error message"
+  },
+  "time": 0.000123
+}
+```
+
+## TLS/HTTPS Support
+
+Qdrant supports TLS encryption for both REST and gRPC APIs:
+
+**Configuration:**
+```yaml
+service:
+  enable_tls: true
+  # Optional: verify client certificates
+  verify_https_client_certificate: false
+```
+
+With TLS enabled:
+- REST API: `https://localhost:6333`
+- gRPC API: Uses TLS transport on port `6334`
+
+## Rate Limiting & Timeouts
+
+**Request Size Limit:**
+```yaml
+service:
+  max_request_size_mb: 32  # Default: 32 MB
+```
+
+**Operation Timeouts:**
+Many operations accept an optional `timeout` parameter (in seconds):
+
+```bash
+curl -X POST 'http://localhost:6333/collections/my_collection/points/search?timeout=5' \
+  -H 'Content-Type: application/json' \
+  --data-raw '{
+    "vector": [0.1, 0.2, 0.3, 0.4],
+    "limit": 10
+  }'
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/api/authentication">
+    Learn how to secure your API with API keys and JWT tokens
+  </Card>
+  <Card title="Collections API" icon="folder" href="/api/collections/list">
+    Manage collections and configure vector spaces
+  </Card>
+  <Card title="Points API" icon="circle-dot" href="/api/points/search">
+    Insert, update, and manage vector points
+  </Card>
+  <Card title="Search API" icon="magnifying-glass" href="/api/points/search">
+    Perform vector similarity searches
+  </Card>
+</CardGroup>

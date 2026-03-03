@@ -1,0 +1,65 @@
+---
+title: List Collections
+openapi: GET /collections
+---
+
+Returns a list of all existing collections in the Qdrant instance.
+
+## Request
+
+No request body is required for this endpoint.
+
+```bash
+curl -X GET http://localhost:6333/collections
+```
+
+## Response
+
+Returns a list of collection names.
+
+<ResponseField name="result" type="object">
+  <ResponseField name="collections" type="array">
+    Array of collection descriptions
+    <ResponseField name="name" type="string">
+      Name of the collection
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "result": {
+    "collections": [
+      {
+        "name": "my-collection"
+      },
+      {
+        "name": "test-collection"
+      }
+    ]
+  },
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+## Errors
+
+<ResponseField name="status" type="object">
+  <ResponseField name="error" type="string">
+    Error message if the request fails
+  </ResponseField>
+</ResponseField>
+
+### Example Error
+
+```json
+{
+  "status": {
+    "error": "Internal server error"
+  },
+  "time": 0.002
+}
+```

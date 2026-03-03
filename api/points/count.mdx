@@ -1,0 +1,261 @@
+---
+title: Count Points
+api: POST /collections/{name}/points/count
+---
+
+Count the number of points in a collection, optionally filtered by conditions.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection to count points in
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="consistency" type="string">
+  Read consistency level for the count operation
+</ParamField>
+
+## Request Body
+
+<ParamField body="filter" type="object">
+  Filter conditions to count only specific points. If not provided, counts all points in the collection.
+  
+  <Expandable title="Filter Structure">
+    <ParamField body="must" type="array">
+      All conditions must match
+    </ParamField>
+    
+    <ParamField body="should" type="array">
+      At least one condition must match
+    </ParamField>
+    
+    <ParamField body="must_not" type="array">
+      None of the conditions must match
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="exact" type="boolean" default="true">
+  If `true`, returns exact count. If `false`, may return approximate count for better performance.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  <Expandable title="Count Result">
+    <ResponseField name="count" type="integer">
+      Number of points matching the filter (or total points if no filter)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok` or `error`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Count All Points
+
+```json
+{}
+```
+
+Or:
+```json
+{
+  "exact": true
+}
+```
+
+### Count with Filter
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "city",
+        "match": {
+          "value": "Berlin"
+        }
+      }
+    ]
+  }
+}
+```
+
+### Count with Range Filter
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "price",
+        "range": {
+          "gte": 10.0,
+          "lte": 100.0
+        }
+      }
+    ]
+  },
+  "exact": true
+}
+```
+
+### Count with Multiple Conditions
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "category",
+        "match": {
+          "value": "electronics"
+        }
+      },
+      {
+        "key": "in_stock",
+        "match": {
+          "value": true
+        }
+      }
+    ]
+  }
+}
+```
+
+### Count with Should Condition
+
+```json
+{
+  "filter": {
+    "should": [
+      {
+        "key": "city",
+        "match": {
+          "value": "Berlin"
+        }
+      },
+      {
+        "key": "city",
+        "match": {
+          "value": "London"
+        }
+      }
+    ]
+  }
+}
+```
+
+### Count Excluding Certain Points
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "category",
+        "match": {
+          "value": "books"
+        }
+      }
+    ],
+    "must_not": [
+      {
+        "key": "status",
+        "match": {
+          "value": "archived"
+        }
+      }
+    ]
+  }
+}
+```
+
+### Response Example
+
+```json
+{
+  "result": {
+    "count": 1547
+  },
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+### Zero Results Response
+
+```json
+{
+  "result": {
+    "count": 0
+  },
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+## Filter Examples
+
+### Match Filter
+
+Exact match on a field:
+```json
+{
+  "key": "category",
+  "match": {
+    "value": "electronics"
+  }
+}
+```
+
+### Range Filter
+
+Numeric range:
+```json
+{
+  "key": "price",
+  "range": {
+    "gte": 10.0,
+    "lt": 100.0
+  }
+}
+```
+
+### Geo Filter
+
+Points within radius:
+```json
+{
+  "key": "location",
+  "geo_radius": {
+    "center": {
+      "lat": 52.52,
+      "lon": 13.405
+    },
+    "radius": 1000
+  }
+}
+```
+
+### Array Contains
+
+Check if array field contains value:
+```json
+{
+  "key": "tags",
+  "match": {
+    "any": ["sale", "new"]
+  }
+}
+```

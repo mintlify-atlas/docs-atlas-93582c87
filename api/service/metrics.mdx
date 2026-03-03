@@ -1,0 +1,343 @@
+---
+title: Prometheus Metrics
+api: GET /metrics
+---
+
+Exports Qdrant metrics in Prometheus text-based exposition format for monitoring and alerting.
+
+## Description
+
+The `/metrics` endpoint provides comprehensive system and application metrics compatible with Prometheus and other monitoring systems. Metrics are automatically collected from telemetry data and formatted according to the [Prometheus exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/).
+
+## Query Parameters
+
+<ParamField query="anonymize" type="boolean" default="false">
+  Anonymize collection names and sensitive data in metric labels
+</ParamField>
+
+<ParamField query="timeout" type="integer" default="60">
+  Timeout in seconds for collecting metrics (minimum: 1)
+</ParamField>
+
+## Response Format
+
+Returns `text/plain` content with Prometheus metrics:
+
+```
+# HELP app_info information about qdrant server
+# TYPE app_info gauge
+app_info{name="qdrant",version="1.8.0"} 1
+
+# HELP cluster_enabled is cluster support enabled
+# TYPE cluster_enabled gauge
+cluster_enabled 1
+
+# HELP cluster_commit index of last committed operation
+# TYPE cluster_commit counter
+cluster_commit{peer_id="123456789"} 1234
+
+# HELP collections_total number of collections
+# TYPE collections_total gauge
+collections_total 5
+
+# HELP collection_points approximate amount of points per collection
+# TYPE collection_points gauge
+collection_points{id="my_collection"} 1000000
+```
+
+## Metric Categories
+
+### Application Metrics
+
+<Accordion title="App Info & Features">
+  **app_info** (gauge)
+  - Information about Qdrant server version
+  - Labels: `name`, `version`
+  
+  **app_status_recovery_mode** (gauge)
+  - Whether recovery mode is enabled (1) or disabled (0)
+</Accordion>
+
+### Cluster Metrics
+
+<Accordion title="Cluster Status">
+  **cluster_enabled** (gauge)
+  - Whether clustering is enabled (1) or disabled (0)
+  
+  **cluster_peers_total** (gauge)
+  - Total number of peers in the cluster
+  
+  **cluster_term** (counter)
+  - Current Raft consensus term
+  
+  **cluster_commit** (counter)
+  - Index of last committed operation
+  - Labels: `peer_id`
+  
+  **cluster_pending_operations_total** (gauge)
+  - Number of operations waiting to be applied
+  
+  **cluster_voter** (gauge)
+  - Whether this peer is a voter (1) or learner (0)
+  
+  **cluster_working_state** (gauge)
+  - Consensus thread status
+  - Labels: `state` ("working" or "stopped")
+  
+  **cluster_last_update_timestamp_seconds** (counter)
+  - Unix timestamp of last consensus update
+</Accordion>
+
+### Collection Metrics
+
+<Accordion title="Collections & Points">
+  **collections_total** (gauge)
+  - Total number of collections
+  
+  **collections_vector_total** (gauge)
+  - Total number of vectors across all collections
+  
+  **collection_points** (gauge)
+  - Approximate point count per collection
+  - Labels: `id` (collection name)
+  
+  **collection_vectors** (gauge)
+  - Vector count by vector name
+  - Labels: `collection`, `vector`
+  
+  **collection_indexed_only_excluded_points** (gauge)
+  - Points excluded from indexed-only requests
+  - Labels: `id`, `vector`
+</Accordion>
+
+<Accordion title="Collection Health">
+  **collection_active_replicas_min** (gauge)
+  - Minimum active replicas across all shards
+  
+  **collection_active_replicas_max** (gauge)
+  - Maximum active replicas across all shards
+  
+  **collection_dead_replicas** (gauge)
+  - Total shard replicas in non-active state
+  
+  **collection_running_optimizations** (gauge)
+  - Number of running optimization tasks
+  - Labels: `id`
+  
+  **collection_update_queue_length** (gauge)
+  - Pending operations in update queue
+  - Labels: `id`
+</Accordion>
+
+<Accordion title="Shard Transfers">
+  **collection_shard_transfer_incoming** (gauge)
+  - Number of incoming shard transfers
+  - Labels: `id`
+  
+  **collection_shard_transfer_outgoing** (gauge)
+  - Number of outgoing shard transfers
+  - Labels: `id`
+</Accordion>
+
+### Request Metrics
+
+<Accordion title="REST API Metrics">
+  **rest_responses_total** (counter)
+  - Total number of REST responses
+  - Labels: `method`, `endpoint`, `status`
+  
+  **rest_responses_avg_duration_seconds** (gauge)
+  - Average response duration
+  - Labels: `method`, `endpoint`, `status`
+  
+  **rest_responses_min_duration_seconds** (gauge)
+  - Minimum response duration
+  
+  **rest_responses_max_duration_seconds** (gauge)
+  - Maximum response duration
+  
+  **rest_responses_duration_seconds** (histogram)
+  - Response duration histogram with buckets
+
+  Only tracks whitelisted endpoints including:
+  - `/collections/{name}/points`
+  - `/collections/{name}/points/search`
+  - `/collections/{name}/points/query`
+  - `/collections/{name}/points/recommend`
+  - See full list in `src/common/metrics.rs:29`
+</Accordion>
+
+<Accordion title="gRPC Metrics">
+  **grpc_responses_total** (counter)
+  - Total number of gRPC responses
+  - Labels: `endpoint`, `status`
+  
+  **grpc_responses_duration_seconds** (histogram)
+  - Response duration distribution
+  
+  Tracked gRPC methods:
+  - `/qdrant.Points/Search`
+  - `/qdrant.Points/Query`
+  - `/qdrant.Points/Upsert`
+  - See full list in `src/common/metrics.rs:62`
+</Accordion>
+
+### Memory Metrics
+
+<Accordion title="Memory Usage">
+  **memory_active_bytes** (gauge)
+  - Bytes in active pages allocated by application
+  
+  **memory_allocated_bytes** (gauge)
+  - Total bytes allocated by application
+  
+  **memory_metadata_bytes** (gauge)
+  - Bytes dedicated to allocator metadata
+  
+  **memory_resident_bytes** (gauge)
+  - Maximum bytes in physically resident pages
+  
+  **memory_retained_bytes** (gauge)
+  - Total bytes in virtual memory mappings
+</Accordion>
+
+### System Metrics (Linux only)
+
+<Accordion title="Process & System">
+  **process_threads** (gauge)
+  - Count of active threads
+  
+  **process_open_mmaps** (gauge)
+  - Count of open memory maps
+  
+  **system_max_mmaps** (gauge)
+  - System-wide limit for memory maps
+  
+  **process_open_fds** (gauge)
+  - Open file descriptors
+  
+  **process_max_fds** (gauge)
+  - File descriptor limit
+  
+  **process_minor_page_faults_total** (counter)
+  - Page faults not requiring disk access
+  
+  **process_major_page_faults_total** (counter)
+  - Page faults requiring disk access
+</Accordion>
+
+### Hardware Metrics
+
+<Accordion title="I/O Metrics">
+  **collection_hardware_metric_cpu** (counter)
+  - CPU usage per collection
+  - Labels: `id`
+  
+  **collection_hardware_metric_payload_io_read** (counter)
+  - Payload storage read I/O
+  
+  **collection_hardware_metric_payload_io_write** (counter)
+  - Payload storage write I/O
+  
+  **collection_hardware_metric_vector_io_read** (counter)
+  - Vector storage read I/O
+  
+  **collection_hardware_metric_vector_io_write** (counter)
+  - Vector storage write I/O
+</Accordion>
+
+### Snapshot Metrics
+
+<Accordion title="Snapshots">
+  **snapshot_creation_running** (gauge)
+  - Currently running snapshot creations
+  - Labels: `id`
+  
+  **snapshot_recovery_running** (gauge)
+  - Currently running snapshot recoveries
+  - Labels: `id`
+  
+  **snapshot_created_total** (counter)
+  - Total snapshots created
+  - Labels: `id`
+</Accordion>
+
+## Custom Metric Prefix
+
+You can configure a custom prefix for all metrics in your `config.yaml`:
+
+```yaml
+service:
+  metrics_prefix: "qdrant_"
+```
+
+This results in metrics like:
+```
+qdrant_collections_total 5
+qdrant_cluster_commit{peer_id="123"} 1234
+```
+
+## Separate Metrics Port
+
+For security, you can expose metrics on a dedicated port:
+
+```yaml
+service:
+  host: 0.0.0.0
+  http_port: 6333
+  metrics_port: 9091  # Separate metrics port
+```
+
+Then configure Prometheus to scrape `http://qdrant:9091/metrics`.
+
+## Example Usage
+
+<CodeGroup>
+```bash cURL
+curl http://localhost:6333/metrics
+```
+
+```bash Filter Specific Metric
+curl http://localhost:6333/metrics | grep collection_points
+```
+
+```bash Anonymized Metrics
+curl "http://localhost:6333/metrics?anonymize=true"
+```
+
+```yaml Prometheus Scrape Config
+scrape_configs:
+  - job_name: 'qdrant'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['qdrant:6333']
+```
+
+```python Python
+import requests
+from prometheus_client.parser import text_string_to_metric_families
+
+response = requests.get("http://localhost:6333/metrics")
+for family in text_string_to_metric_families(response.text):
+    for sample in family.samples:
+        print(f"{sample.name}{sample.labels}: {sample.value}")
+```
+</CodeGroup>
+
+## Grafana Dashboard
+
+Qdrant provides an official Grafana dashboard for visualizing these metrics. Import dashboard ID `17501` from [Grafana.com](https://grafana.com/grafana/dashboards/17501).
+
+## Implementation Details
+
+Metrics are generated from telemetry data:
+- Source: `src/common/metrics.rs` - Metric formatting and export
+- Telemetry: `src/common/telemetry.rs` - Data collection
+- Endpoint: `src/actix/api/service_api.rs:89` - HTTP handler
+
+Metrics use `DetailsLevel::Level4` with histograms enabled for maximum detail.
+
+## Related Endpoints
+
+- [Telemetry](/api/service/telemetry) - Raw telemetry data in JSON format
+- [Cluster Status](/api/cluster/status) - Cluster-specific status information

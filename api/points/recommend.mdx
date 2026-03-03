@@ -1,0 +1,189 @@
+---
+title: Recommend Points
+api: POST /collections/{name}/points/recommend
+---
+
+Recommend points based on positive and negative examples. Uses the average of positive examples minus the average of negative examples to find similar points.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="consistency" type="string">
+  Read consistency level
+</ParamField>
+
+## Request Body
+
+<ParamField body="positive" type="array" required>
+  Array of point IDs or vectors to use as positive examples. Results should be similar to these.
+</ParamField>
+
+<ParamField body="negative" type="array">
+  Array of point IDs or vectors to use as negative examples. Results should be dissimilar to these.
+</ParamField>
+
+<ParamField body="strategy" type="string" default="average_vector">
+  Strategy for recommendation:
+  - `average_vector` - Average positive and negative vectors: `query = avg_pos + avg_pos - avg_neg`
+  - `best_score` - Use custom search objective, comparing against all examples
+  - `sum_scores` - Sum all scores (positive added, negative subtracted)
+</ParamField>
+
+<ParamField body="limit" type="integer" default="10">
+  Maximum number of results to return
+</ParamField>
+
+<ParamField body="offset" type="integer" default="0">
+  Number of results to skip
+</ParamField>
+
+<ParamField body="filter" type="object">
+  Filter conditions to narrow down the search space
+</ParamField>
+
+<ParamField body="params" type="object">
+  Search parameters (same as search endpoint)
+</ParamField>
+
+<ParamField body="score_threshold" type="number">
+  Minimum score threshold for results
+</ParamField>
+
+<ParamField body="with_payload" type="boolean | array | object" default="false">
+  Select which payload fields to return
+</ParamField>
+
+<ParamField body="with_vector" type="boolean | array" default="false">
+  Whether to return vector data
+</ParamField>
+
+<ParamField body="using" type="string">
+  Name of the vector to use for recommendation (for named vectors)
+</ParamField>
+
+<ParamField body="lookup_from" type="object">
+  Look for recommendation examples in another collection
+  
+  <Expandable title="Lookup Location">
+    <ParamField body="collection" type="string" required>
+      Collection name to lookup from
+    </ParamField>
+    
+    <ParamField body="vector" type="string">
+      Vector name in the lookup collection
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Response
+
+Same format as search endpoint - array of scored points.
+
+## Examples
+
+### Basic Recommendation
+
+```json
+{
+  "positive": [1, 2, 3],
+  "negative": [10],
+  "limit": 5
+}
+```
+
+### Recommendation with Vectors
+
+```json
+{
+  "positive": [
+    [0.2, 0.1, 0.9, 0.7],
+    [0.3, 0.2, 0.8, 0.6]
+  ],
+  "negative": [
+    [0.5, 0.5, 0.1, 0.1]
+  ],
+  "limit": 10,
+  "with_payload": true
+}
+```
+
+### Recommendation with Filter
+
+```json
+{
+  "positive": [1, 2],
+  "limit": 5,
+  "filter": {
+    "must": [
+      {
+        "key": "category",
+        "match": {
+          "value": "electronics"
+        }
+      }
+    ]
+  },
+  "strategy": "best_score"
+}
+```
+
+### Recommendation with Best Score Strategy
+
+```json
+{
+  "positive": [1, 5, 10],
+  "negative": [3, 7],
+  "strategy": "best_score",
+  "limit": 10,
+  "score_threshold": 0.6,
+  "with_payload": ["name", "price"],
+  "with_vector": false
+}
+```
+
+### Cross-Collection Recommendation
+
+```json
+{
+  "positive": [1, 2, 3],
+  "limit": 5,
+  "lookup_from": {
+    "collection": "products",
+    "vector": "image"
+  }
+}
+```
+
+### Response Example
+
+```json
+{
+  "result": [
+    {
+      "id": 42,
+      "version": 1,
+      "score": 0.91,
+      "payload": {
+        "name": "Similar Product",
+        "category": "electronics"
+      }
+    },
+    {
+      "id": 17,
+      "version": 2,
+      "score": 0.85,
+      "payload": {
+        "name": "Another Product",
+        "category": "electronics"
+      }
+    }
+  ],
+  "status": "ok",
+  "time": 0.005
+}
+```

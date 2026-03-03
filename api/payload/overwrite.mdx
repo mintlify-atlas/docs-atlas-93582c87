@@ -1,0 +1,170 @@
+---
+title: Overwrite Payload
+openapi: PUT /collections/{collection_name}/points/payload
+---
+
+Completely replace the payload of specified points with new values. Unlike [Set Payload](/api/payload/set) which merges values, this operation overwrites the entire payload.
+
+## Use Cases
+
+- Replace entire point metadata
+- Reset point payload to a known state
+- Remove old fields while setting new ones
+- Ensure payload contains only specific fields
+
+## Request Body
+
+<ParamField body="payload" type="object" required>
+  The new payload object that will completely replace the existing payload. All previous payload fields will be removed.
+  
+  ```json
+  {
+    "city": "Berlin",
+    "country": "Germany",
+    "population": 3_645_000
+  }
+  ```
+</ParamField>
+
+<ParamField body="points" type="array">
+  List of point IDs to update. Either `points` or `filter` must be provided.
+  
+  ```json
+  [1, 2, 3, 42]
+  ```
+</ParamField>
+
+<ParamField body="filter" type="object">
+  Filter conditions to select points. All points matching the filter will have their payload overwritten. Either `points` or `filter` must be provided.
+  
+  ```json
+  {
+    "must": [
+      {
+        "key": "status",
+        "match": {
+          "value": "outdated"
+        }
+      }
+    ]
+  }
+  ```
+</ParamField>
+
+<ParamField body="key" type="string">
+  Optional path to a nested field using JSON path notation (e.g., `metadata.location`). If specified, only the payload at this path will be overwritten.
+</ParamField>
+
+<ParamField body="shard_key" type="string | array">
+  Optional shard key to target specific shards in a distributed setup.
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="wait" type="boolean" default="true">
+  If `true`, wait for the operation to complete before returning. If `false`, the operation runs in the background.
+</ParamField>
+
+<ParamField query="ordering" type="string">
+  Write ordering guarantees for the operation. Options: `weak`, `medium`, `strong`.
+</ParamField>
+
+<ParamField query="timeout" type="integer">
+  Operation timeout in seconds.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  Update operation result
+  
+  <ResponseField name="operation_id" type="integer">
+    Sequential number of the operation
+  </ResponseField>
+  
+  <ResponseField name="status" type="string">
+    Operation status: `completed` or `acknowledged`
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Overwrite Payload for Specific Points
+
+```json
+{
+  "payload": {
+    "city": "Berlin",
+    "country": "Germany"
+  },
+  "points": [1, 2, 3]
+}
+```
+
+If point 1 previously had payload `{"city": "London", "price": 100}`, after this operation it will only have `{"city": "Berlin", "country": "Germany"}`. The `price` field is removed.
+
+### Overwrite Payload by Filter
+
+```json
+{
+  "payload": {
+    "status": "active",
+    "verified": true
+  },
+  "filter": {
+    "must": [
+      {
+        "key": "status",
+        "match": {
+          "value": "pending"
+        }
+      }
+    ]
+  }
+}
+```
+
+### Overwrite Nested Field
+
+```json
+{
+  "payload": {
+    "lat": 52.52,
+    "lon": 13.405
+  },
+  "points": [1, 2],
+  "key": "location"
+}
+```
+
+## Difference from Set Payload
+
+| Operation | Behavior | Use When |
+|-----------|----------|----------|
+| **Set Payload** | Merges new fields with existing payload | Adding or updating specific fields |
+| **Overwrite Payload** | Replaces entire payload, removing old fields | Resetting payload or ensuring exact structure |
+
+### Example Comparison
+
+Given a point with existing payload:
+```json
+{"city": "London", "price": 100, "category": "premium"}
+```
+
+**Set Payload** with `{"city": "Berlin", "country": "Germany"}` results in:
+```json
+{"city": "Berlin", "price": 100, "category": "premium", "country": "Germany"}
+```
+
+**Overwrite Payload** with `{"city": "Berlin", "country": "Germany"}` results in:
+```json
+{"city": "Berlin", "country": "Germany"}
+```

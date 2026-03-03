@@ -1,0 +1,395 @@
+---
+title: Authentication
+description: Secure your Qdrant API with API keys and JWT tokens
+---
+
+Qdrant supports authentication via API keys and JWT tokens to control access to your vector database. When authentication is enabled, all requests must include valid credentials.
+
+## Authentication Methods
+
+Qdrant supports two authentication methods:
+
+1. **API Keys** - Simple token-based authentication
+2. **JWT Tokens** - Role-based access control with fine-grained permissions
+
+<Note>
+By default, authentication is **disabled**. When no API key is configured, all requests have full access without authentication.
+</Note>
+
+## API Key Authentication
+
+### Configuration
+
+API keys are configured via environment variables or the configuration file.
+
+**Environment Variables:**
+```bash
+# Read-write API key
+export QDRANT__SERVICE__API_KEY="your-secret-api-key"
+
+# Alternative read-write key (for key rotation)
+export QDRANT__SERVICE__ALT_API_KEY="your-alternative-key"
+
+# Read-only API key
+export QDRANT__SERVICE__READ_ONLY_API_KEY="your-readonly-key"
+```
+
+**Configuration File** (`config/config.yaml`):
+```yaml
+service:
+  api_key: "your-secret-api-key"
+  alt_api_key: "your-alternative-key"  # Optional
+  read_only_api_key: "your-readonly-key"  # Optional
+```
+
+<Warning>
+API keys are sensitive credentials. Use strong, randomly generated keys and never commit them to version control.
+</Warning>
+
+### Access Levels
+
+Qdrant supports two access levels with API keys:
+
+| Key Type | Access Level | Operations |
+|----------|--------------|------------|
+| `api_key` / `alt_api_key` | **Read-Write** | All operations including create, update, delete |
+| `read_only_api_key` | **Read-Only** | Only GET requests and search operations |
+
+### Using API Keys
+
+Include your API key in requests using the `api-key` header:
+
+**Header Format:**
+```
+api-key: your-secret-api-key
+```
+
+#### REST API Examples
+
+**Using curl:**
+```bash
+curl -X GET 'http://localhost:6333/collections' \
+  -H 'api-key: your-secret-api-key'
+```
+
+**Creating a collection:**
+```bash
+curl -X PUT 'http://localhost:6333/collections/my_collection' \
+  -H 'api-key: your-secret-api-key' \
+  -H 'Content-Type: application/json' \
+  --data-raw '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    }
+  }'
+```
+
+**Searching with authentication:**
+```bash
+curl -X POST 'http://localhost:6333/collections/my_collection/points/search' \
+  -H 'api-key: your-secret-api-key' \
+  -H 'Content-Type: application/json' \
+  --data-raw '{
+    "vector": [0.1, 0.2, 0.3, 0.4],
+    "limit": 10
+  }'
+```
+
+**Read-only access:**
+```bash
+# This works with read-only key
+curl -X GET 'http://localhost:6333/collections/my_collection' \
+  -H 'api-key: your-readonly-key'
+
+# This fails with read-only key (403 Forbidden)
+curl -X DELETE 'http://localhost:6333/collections/my_collection' \
+  -H 'api-key: your-readonly-key'
+```
+
+#### Bearer Token Format
+
+API keys can also be sent as Bearer tokens in the `Authorization` header:
+
+```bash
+curl -X GET 'http://localhost:6333/collections' \
+  -H 'Authorization: Bearer your-secret-api-key'
+```
+
+**Implementation Reference:** `src/common/auth/mod.rs:105-110`
+
+```rust
+let Some(key) = get_header(HTTP_HEADER_API_KEY)
+    .or_else(|| get_header("authorization").and_then(|v| v.strip_prefix("Bearer ")))
+else {
+    return Err(AuthError::Unauthorized(
+        "Must provide an API key or an Authorization bearer token".to_string(),
+    ));
+};
+```
+
+#### Python Client Example
+
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient(
+    url="http://localhost:6333",
+    api_key="your-secret-api-key"
+)
+
+# Now all operations use the API key automatically
+collections = client.get_collections()
+```
+
+#### JavaScript/TypeScript Client Example
+
+```typescript
+import { QdrantClient } from '@qdrant/js-client-rest';
+
+const client = new QdrantClient({
+  url: 'http://localhost:6333',
+  apiKey: 'your-secret-api-key'
+});
+
+// All operations are authenticated
+const collections = await client.getCollections();
+```
+
+### gRPC Authentication
+
+For gRPC API, include the API key in metadata:
+
+**Header Format:**
+```
+api-key: your-secret-api-key
+```
+
+**Python gRPC Example:**
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient(
+    url="localhost",
+    port=6334,
+    api_key="your-secret-api-key",
+    prefer_grpc=True
+)
+```
+
+**Implementation Reference:** `src/tonic/auth.rs:58-60`
+
+## JWT-Based Authentication
+
+For advanced use cases, Qdrant supports JWT tokens with role-based access control (RBAC).
+
+### Enabling JWT RBAC
+
+**Configuration:**
+```yaml
+service:
+  api_key: "your-jwt-secret-key"  # Used to sign/verify JWTs
+  jwt_rbac: true  # Enable JWT RBAC mode
+```
+
+**Environment Variable:**
+```bash
+export QDRANT__SERVICE__JWT_RBAC=true
+```
+
+### JWT Token Structure
+
+When JWT RBAC is enabled, Qdrant expects tokens signed with the configured `api_key` secret.
+
+**Example JWT Payload:**
+```json
+{
+  "sub": "user-id-or-name",
+  "exp": 1735689600,
+  "access": {
+    /* Access control claims */
+  },
+  "value_exists": {
+    /* Stateful validation claims */
+  }
+}
+```
+
+**Implementation Reference:** `src/common/auth/claims.rs`, `src/common/auth/jwt_parser.rs`
+
+### Using JWT Tokens
+
+**With `api-key` header:**
+```bash
+curl -X GET 'http://localhost:6333/collections' \
+  -H 'api-key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+```
+
+**With `Authorization` header:**
+```bash
+curl -X GET 'http://localhost:6333/collections' \
+  -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+```
+
+## Authentication Errors
+
+### Unauthorized (401)
+
+Returned when credentials are missing or invalid:
+
+```json
+{
+  "status": "error",
+  "error": "Must provide an API key or an Authorization bearer token"
+}
+```
+
+**Common Causes:**
+- No API key provided
+- Invalid API key
+- Expired JWT token
+- Invalid JWT signature
+
+### Forbidden (403)
+
+Returned when credentials are valid but lack required permissions:
+
+```json
+{
+  "status": "error",
+  "error": "Forbidden"
+}
+```
+
+**Common Causes:**
+- Using read-only key for write operations
+- JWT token lacks required permissions
+- Stateful JWT validation failed
+
+**Implementation Reference:** `src/actix/auth.rs:144-150`
+
+## Whitelisted Endpoints
+
+Some endpoints bypass authentication for operational purposes:
+
+**REST API (Public):**
+- `/` - Health check and version info
+- `/healthz` - Kubernetes health probe
+- `/readyz` - Readiness probe
+- `/metrics` - Prometheus metrics (if enabled)
+
+**gRPC API (Public):**
+- `/qdrant.Qdrant/HealthCheck`
+- `/grpc.health.v1.Health/Check`
+
+**Implementation References:**
+- REST: `src/actix/mod.rs:85-92`
+- gRPC: `src/tonic/auth.rs:40-56`
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Strong API Keys">
+    Generate cryptographically secure random keys with sufficient length:
+    
+    ```bash
+    # Generate a secure random key (Linux/macOS)
+    openssl rand -base64 32
+    ```
+    
+    Qdrant recommends keys with at least **256 bits of entropy** for JWT secrets.
+  </Accordion>
+
+  <Accordion title="Enable TLS/HTTPS">
+    Always use TLS in production to prevent credentials from being intercepted:
+    
+    ```yaml
+    service:
+      enable_tls: true
+      api_key: "your-secret-key"
+    ```
+  </Accordion>
+
+  <Accordion title="Implement Key Rotation">
+    Use `alt_api_key` for zero-downtime key rotation:
+    
+    1. Set `alt_api_key` to new key
+    2. Update clients to use new key
+    3. Move new key to `api_key`
+    4. Remove `alt_api_key`
+  </Accordion>
+
+  <Accordion title="Use Read-Only Keys for Analytics">
+    Limit blast radius by using read-only keys for dashboards and analytics:
+    
+    ```yaml
+    service:
+      api_key: "write-key-for-backend"
+      read_only_api_key: "read-key-for-dashboard"
+    ```
+  </Accordion>
+
+  <Accordion title="Never Commit Credentials">
+    Use environment variables or secret management systems:
+    
+    ```bash
+    # .env file (add to .gitignore)
+    QDRANT__SERVICE__API_KEY=your-secret-key
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Separate Metrics Port
+
+For internal monitoring, Qdrant can serve metrics on a separate port without authentication:
+
+**Configuration:**
+```yaml
+service:
+  api_key: "your-secret-key"
+  metrics_port: 9091  # Separate unprotected port for /metrics
+```
+
+<Warning>
+The metrics port should **never** be exposed to untrusted networks. It bypasses authentication for operational convenience.
+</Warning>
+
+## Testing Authentication
+
+**Check if authentication is enabled:**
+```bash
+# Without auth - should return 401 if enabled
+curl -X GET 'http://localhost:6333/collections'
+
+# With auth - should return 200
+curl -X GET 'http://localhost:6333/collections' \
+  -H 'api-key: your-secret-api-key'
+```
+
+**Verify read-only restrictions:**
+```bash
+# Should succeed
+curl -X GET 'http://localhost:6333/collections' \
+  -H 'api-key: your-readonly-key'
+
+# Should return 403 Forbidden
+curl -X DELETE 'http://localhost:6333/collections/test' \
+  -H 'api-key: your-readonly-key'
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Collections API" icon="folder" href="/api/collections/list">
+    Learn how to create and manage collections
+  </Card>
+  <Card title="Points API" icon="circle-dot" href="/api/points/search">
+    Insert and manage vector points
+  </Card>
+  <Card title="Search API" icon="magnifying-glass" href="/api/points/search">
+    Perform authenticated vector searches
+  </Card>
+  <Card title="Cluster Security" icon="shield" href="/deployment/security">
+    Secure your Qdrant cluster
+  </Card>
+</CardGroup>

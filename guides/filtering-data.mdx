@@ -1,0 +1,437 @@
+---
+title: Filtering Data
+description: Use filters to refine search results based on payload conditions
+---
+
+Filters allow you to narrow search results based on payload metadata. Qdrant supports a rich set of filtering conditions that can be combined with vector similarity search.
+
+## Basic Filter Structure
+
+Filters use a boolean logic structure with `must`, `should`, and `must_not` clauses:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 10,
+    "filter": {
+      "must": [
+        {"key": "city", "match": {"value": "London"}}
+      ]
+    }
+  }'
+```
+
+## Filter Clauses
+
+### Must (AND)
+
+All conditions must be satisfied:
+
+```json
+{
+  "filter": {
+    "must": [
+      {"key": "city", "match": {"value": "London"}},
+      {"key": "price", "range": {"gte": 10.0, "lte": 100.0}}
+    ]
+  }
+}
+```
+
+### Should (OR)
+
+At least one condition must be satisfied:
+
+```json
+{
+  "filter": {
+    "should": [
+      {"key": "city", "match": {"value": "London"}},
+      {"key": "city", "match": {"value": "Berlin"}}
+    ]
+  }
+}
+```
+
+### Must Not (NOT)
+
+None of the conditions can be satisfied:
+
+```json
+{
+  "filter": {
+    "must_not": [
+      {"key": "city", "match": {"value": "Paris"}}
+    ]
+  }
+}
+```
+
+### Combining Clauses
+
+Combine multiple clause types for complex logic:
+
+```json
+{
+  "filter": {
+    "must": [
+      {"key": "category", "match": {"value": "electronics"}}
+    ],
+    "should": [
+      {"key": "brand", "match": {"value": "Apple"}},
+      {"key": "brand", "match": {"value": "Samsung"}}
+    ],
+    "must_not": [
+      {"key": "discontinued", "match": {"value": true}}
+    ]
+  }
+}
+```
+
+## Match Conditions
+
+### Exact Match
+
+Match a specific value (works with keyword, integer, bool):
+
+```json
+{
+  "key": "city",
+  "match": {
+    "value": "London"
+  }
+}
+```
+
+### Match Any
+
+Match any value from a list:
+
+```json
+{
+  "key": "city",
+  "match": {
+    "any": ["London", "Berlin", "Moscow"]
+  }
+}
+```
+
+### Match Except
+
+Match any value except those in the list:
+
+```json
+{
+  "key": "status",
+  "match": {
+    "except": ["draft", "archived"]
+  }
+}
+```
+
+## Range Conditions
+
+Filter by numeric or datetime ranges:
+
+### Numeric Range
+
+```json
+{
+  "key": "price",
+  "range": {
+    "gte": 10.0,
+    "lt": 100.0
+  }
+}
+```
+
+Operators:
+- `gte` - Greater than or equal
+- `gt` - Greater than
+- `lte` - Less than or equal
+- `lt` - Less than
+
+### DateTime Range
+
+```json
+{
+  "key": "created_at",
+  "range": {
+    "gte": "2023-01-01T00:00:00Z",
+    "lt": "2024-01-01T00:00:00Z"
+  }
+}
+```
+
+## Geo Filters
+
+### Geo Radius
+
+Find points within a radius:
+
+```json
+{
+  "key": "location",
+  "geo_radius": {
+    "center": {
+      "lon": 13.404954,
+      "lat": 52.520008
+    },
+    "radius": 5000
+  }
+}
+```
+
+Radius is in meters.
+
+### Geo Bounding Box
+
+Find points within a rectangular area:
+
+```json
+{
+  "key": "location",
+  "geo_bounding_box": {
+    "top_left": {
+      "lon": 13.08835,
+      "lat": 52.67551
+    },
+    "bottom_right": {
+      "lon": 13.76116,
+      "lat": 52.33826
+    }
+  }
+}
+```
+
+### Geo Polygon
+
+Find points within a polygon:
+
+```json
+{
+  "key": "location",
+  "geo_polygon": {
+    "exterior": {
+      "points": [
+        {"lon": 13.404954, "lat": 52.520008},
+        {"lon": 13.505954, "lat": 52.520008},
+        {"lon": 13.505954, "lat": 52.420008},
+        {"lon": 13.404954, "lat": 52.420008},
+        {"lon": 13.404954, "lat": 52.520008}
+      ]
+    }
+  }
+}
+```
+
+<Note>
+The first and last points must be identical to close the polygon.
+</Note>
+
+## Nested Field Filters
+
+Filter on nested JSON fields using dot notation or JSON path:
+
+```json
+{
+  "key": "user.profile.age",
+  "range": {
+    "gte": 18,
+    "lte": 65
+  }
+}
+```
+
+Or with array notation:
+
+```json
+{
+  "key": "metadata.tags[0]",
+  "match": {
+    "value": "featured"
+  }
+}
+```
+
+## Empty and Null Checks
+
+### Is Empty
+
+Check if a field has no values:
+
+```json
+{
+  "is_empty": {
+    "key": "tags"
+  }
+}
+```
+
+### Is Null
+
+Check if a field is null or missing:
+
+```json
+{
+  "is_null": {
+    "key": "description"
+  }
+}
+```
+
+Alternative syntax:
+
+```json
+{
+  "key": "description",
+  "is_null": true
+}
+```
+
+## Values Count
+
+Filter by the number of values in an array field:
+
+```json
+{
+  "key": "tags",
+  "values_count": {
+    "gte": 3,
+    "lte": 10
+  }
+}
+```
+
+## Full Text Search
+
+Search within text fields (requires text index):
+
+```json
+{
+  "key": "description",
+  "match": {
+    "text": "machine learning"
+  }
+}
+```
+
+## Complete Example
+
+A real-world filter combining multiple conditions:
+
+```bash
+curl -X POST http://localhost:6333/collections/products/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": [0.2, 0.1, 0.9, 0.7],
+    "limit": 20,
+    "filter": {
+      "must": [
+        {
+          "key": "category",
+          "match": {"value": "electronics"}
+        },
+        {
+          "key": "price",
+          "range": {
+            "gte": 50,
+            "lte": 500
+          }
+        },
+        {
+          "key": "in_stock",
+          "match": {"value": true}
+        }
+      ],
+      "should": [
+        {
+          "key": "brand",
+          "match": {"any": ["Apple", "Samsung", "Sony"]}
+        },
+        {
+          "key": "rating",
+          "range": {"gte": 4.5}
+        }
+      ],
+      "must_not": [
+        {
+          "key": "status",
+          "match": {"value": "discontinued"}
+        }
+      ]
+    }
+  }'
+```
+
+## Filter-First vs Post-Filter
+
+By default, Qdrant applies filters before vector search (filter-first strategy). This is most efficient when filters significantly reduce the search space.
+
+For some queries, you may want to search first then filter:
+
+```bash
+curl -X POST http://localhost:6333/collections/my_collection/points/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": [0.2, 0.1, 0.9, 0.7],
+    "filter": {
+      "must": [{"key": "city", "match": {"value": "London"}}]
+    },
+    "using": "default",
+    "limit": 10
+  }'
+```
+
+## Performance Tips
+
+<Steps>
+  <Step title="Create payload indexes">
+    For fields used frequently in filters, [create indexes](/guides/payload-indexing) to dramatically improve performance.
+  </Step>
+
+  <Step title="Order filter clauses">
+    Put the most selective filters first in `must` clauses. Qdrant evaluates conditions in order.
+  </Step>
+
+  <Step title="Use appropriate data types">
+    - Use `keyword` for exact matching (status, categories, IDs)
+    - Use `integer` for numeric IDs and counts
+    - Use `float` for prices and ratings
+    - Use `geo` for location-based filtering
+  </Step>
+
+  <Step title="Avoid complex nested filters">
+    Deep nesting can be slower. Consider flattening data structure when possible.
+  </Step>
+
+  <Step title="Use match.any for multiple values">
+    Instead of multiple `should` clauses with single matches, use `match.any`:
+    
+    ```json
+    // Good
+    {"key": "city", "match": {"any": ["London", "Berlin", "Paris"]}}
+    
+    // Less efficient
+    {
+      "should": [
+        {"key": "city", "match": {"value": "London"}},
+        {"key": "city", "match": {"value": "Berlin"}},
+        {"key": "city", "match": {"value": "Paris"}}
+      ]
+    }
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+**Without Indexes:**
+Filtering without appropriate payload indexes requires scanning all points in a segment, which can be very slow for large collections. Always create indexes for fields used in filters.
+</Warning>
+
+## Next Steps
+
+- Learn how to [create payload indexes](/guides/payload-indexing) for better filter performance
+- Explore [hybrid search](/guides/hybrid-search) combining dense and sparse vectors with filters

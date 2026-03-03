@@ -1,0 +1,464 @@
+---
+title: Sparse Vectors
+description: Use sparse vectors for keyword-based and BM25 search in Qdrant
+---
+
+Sparse vectors are vectors where most values are zero, making them efficient for keyword-based search. They're commonly used for BM25, SPLADE, and other sparse retrieval methods.
+
+## Understanding Sparse Vectors
+
+Unlike dense vectors (where all dimensions have values), sparse vectors only store non-zero dimensions:
+
+```python
+# Dense vector (384 dimensions, all stored)
+[0.1, 0.0, 0.3, 0.0, ..., 0.2]  # 384 * 4 bytes = 1,536 bytes
+
+# Sparse vector (same info, only non-zero values)
+{0: 0.1, 2: 0.3, 383: 0.2}  # ~3 values * 12 bytes = 36 bytes
+```
+
+**Benefits:**
+- Much lower memory usage (typically 1-5% of dense)
+- Interpretable dimensions (e.g., word IDs)
+- Excellent for keyword matching
+- Natural for BM25 and TF-IDF representations
+
+## Creating Collection with Sparse Vectors
+
+### Basic Sparse Vector Configuration
+
+```bash
+curl -X PUT http://localhost:6333/collections/documents \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "text-sparse": {
+        "modifier": "idf"
+      }
+    },
+    "sparse_vectors": {
+      "text-sparse": {}
+    }
+  }'
+```
+
+<Note>
+**Important**: Sparse vectors require both `vectors` and `sparse_vectors` configuration entries with the same name.
+</Note>
+
+### Named Vector Configuration
+
+Combine sparse and dense vectors for hybrid search:
+
+```bash
+curl -X PUT http://localhost:6333/collections/hybrid_search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "dense": {
+        "size": 384,
+        "distance": "Cosine"
+      },
+      "sparse": {
+        "modifier": "idf"
+      }
+    },
+    "sparse_vectors": {
+      "sparse": {
+        "index": {
+          "type": "immutable_ram"
+        }
+      }
+    }
+  }'
+```
+
+## Sparse Vector Format
+
+Sparse vectors use indices and values:
+
+```json
+{
+  "indices": [10, 25, 77, 155],
+  "values": [0.42, 0.85, 0.31, 0.67]
+}
+```
+
+- **indices**: Non-zero dimension positions (unsigned integers)
+- **values**: Corresponding values (floats)
+- Arrays must be same length
+- Indices should be sorted (for best performance)
+
+## Uploading Sparse Vectors
+
+### Single Vector Upload
+
+```bash
+curl -X PUT http://localhost:6333/collections/documents/points \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [
+      {
+        "id": 1,
+        "vector": {
+          "text-sparse": {
+            "indices": [10, 25, 77],
+            "values": [0.42, 0.85, 0.31]
+          }
+        },
+        "payload": {
+          "title": "Machine Learning Basics"
+        }
+      }
+    ]
+  }'
+```
+
+### Batch Upload with Dense and Sparse
+
+```bash
+curl -X PUT http://localhost:6333/collections/hybrid_search/points \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [
+      {
+        "id": 1,
+        "vector": {
+          "dense": [0.1, 0.2, 0.3, ...],
+          "sparse": {
+            "indices": [10, 25, 77],
+            "values": [0.42, 0.85, 0.31]
+          }
+        },
+        "payload": {
+          "title": "Document 1"
+        }
+      },
+      {
+        "id": 2,
+        "vector": {
+          "dense": [0.4, 0.5, 0.6, ...],
+          "sparse": {
+            "indices": [5, 15, 77, 120],
+            "values": [0.55, 0.71, 0.18, 0.92]
+          }
+        },
+        "payload": {
+          "title": "Document 2"
+        }
+      }
+    ]
+  }'
+```
+
+## Searching Sparse Vectors
+
+### Basic Sparse Search
+
+```bash
+curl -X POST http://localhost:6333/collections/documents/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": {
+      "name": "text-sparse",
+      "vector": {
+        "indices": [10, 25, 77],
+        "values": [0.42, 0.85, 0.31]
+      }
+    },
+    "limit": 10
+  }'
+```
+
+### Sparse Search with Filter
+
+```bash
+curl -X POST http://localhost:6333/collections/documents/points/search \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vector": {
+      "name": "text-sparse",
+      "vector": {
+        "indices": [10, 25, 77],
+        "values": [0.42, 0.85, 0.31]
+      }
+    },
+    "filter": {
+      "must": [
+        {"key": "category", "match": {"value": "documentation"}}
+      ]
+    },
+    "limit": 10
+  }'
+```
+
+## Modifiers
+
+Modifiers adjust how sparse vector similarity is calculated:
+
+### IDF Modifier
+
+Applies Inverse Document Frequency weighting:
+
+```json
+{
+  "vectors": {
+    "text-sparse": {
+      "modifier": "idf"
+    }
+  }
+}
+```
+
+This down-weights common terms and up-weights rare terms, improving relevance.
+
+<Note>
+**When to use IDF:**
+- Text search and BM25
+- When term frequency matters
+- Most keyword-based search use cases
+</Note>
+
+### No Modifier
+
+Use raw dot product scores:
+
+```json
+{
+  "vectors": {
+    "text-sparse": {}
+  }
+}
+```
+
+Use when vectors already include proper weighting (e.g., SPLADE embeddings).
+
+## Storage Types
+
+Configure how sparse vectors are stored and indexed:
+
+### Immutable RAM (Default)
+
+Fastest search, append-only:
+
+```json
+{
+  "sparse_vectors": {
+    "text-sparse": {
+      "index": {
+        "type": "immutable_ram"
+      }
+    }
+  }
+}
+```
+
+**Characteristics:**
+- Stored in RAM
+- Optimized for search speed
+- Updates require segment rebuild
+- Best for static or rarely-updated data
+
+### Mutable RAM
+
+Supports updates, slightly slower search:
+
+```json
+{
+  "sparse_vectors": {
+    "text-sparse": {
+      "index": {
+        "type": "mutable_ram"
+      }
+    }
+  }
+}
+```
+
+**Characteristics:**
+- Stored in RAM
+- Supports efficient updates
+- Slightly slower than immutable
+- Best for frequently updated collections
+
+### On-Disk Storage
+
+For very large sparse vector collections:
+
+```json
+{
+  "sparse_vectors": {
+    "text-sparse": {
+      "index": {
+        "type": "immutable_ram",
+        "on_disk": true
+      }
+    }
+  }
+}
+```
+
+## BM25 Integration
+
+Qdrant can generate BM25 sparse vectors automatically:
+
+```bash
+curl -X PUT http://localhost:6333/collections/documents \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "bm25": {
+        "modifier": "idf",
+        "inference": {
+          "model": "qdrant/bm25",
+          "options": {
+            "tokenizer": "word",
+            "lowercase": true,
+            "language": "english"
+          }
+        }
+      }
+    },
+    "sparse_vectors": {
+      "bm25": {}
+    }
+  }'
+```
+
+Then upload text directly:
+
+```bash
+curl -X PUT http://localhost:6333/collections/documents/points \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "points": [
+      {
+        "id": 1,
+        "vector": {
+          "bm25": {
+            "text": "Machine learning is a subset of artificial intelligence"
+          }
+        },
+        "payload": {
+          "title": "ML Introduction"
+        }
+      }
+    ]
+  }'
+```
+
+Qdrant tokenizes text and generates sparse vectors automatically.
+
+## Performance Characteristics
+
+### Memory Usage
+
+For typical text collections:
+
+| Vector Type | Avg Dimensions | Memory per Vector |
+|-------------|----------------|-------------------|
+| Dense (384D) | 384 | ~1,536 bytes |
+| Sparse (BM25) | 10-50 non-zero | ~200-600 bytes |
+| Sparse (SPLADE) | 50-200 non-zero | ~1,000-3,000 bytes |
+
+Sparse vectors typically use 5-50% of dense vector memory.
+
+### Search Speed
+
+Sparse vector search performance:
+- **Small collections (less than 100K)**: 1-5ms per query
+- **Medium collections (100K-1M)**: 5-20ms per query  
+- **Large collections (more than 1M)**: 20-100ms per query
+
+Speed depends on:
+- Average vector sparsity (fewer non-zero = faster)
+- Index type (immutable_ram fastest)
+- Collection size
+- Hardware (CPU speed, RAM bandwidth)
+
+## Best Practices
+
+<Steps>
+  <Step title="Choose appropriate modifier">
+    - Use `idf` for text search and BM25
+    - Use no modifier for pre-weighted vectors (SPLADE)
+  </Step>
+
+  <Step title="Normalize your vectors">
+    For best search quality, ensure sparse vectors are properly normalized according to your similarity metric.
+  </Step>
+
+  <Step title="Sort indices">
+    Always sort indices in ascending order for optimal performance.
+  </Step>
+
+  <Step title="Select storage type">
+    - `immutable_ram`: Best for static data
+    - `mutable_ram`: Best for frequent updates
+    - `on_disk`: Best when RAM is limited
+  </Step>
+
+  <Step title="Combine with dense vectors">
+    For best results, use hybrid search combining sparse and dense vectors. See [Hybrid Search](/guides/hybrid-search).
+  </Step>
+</Steps>
+
+## Common Use Cases
+
+### Keyword Search (BM25)
+
+Best for:
+- Document search
+- FAQ matching
+- Exact keyword matching
+- When users search with specific terms
+
+### Neural Sparse (SPLADE)
+
+Best for:
+- Semantic + keyword matching
+- Better than BM25 for typos and synonyms
+- When you want interpretability
+- Multi-lingual search
+
+### Hybrid Dense + Sparse
+
+Best for:
+- Maximum search quality
+- Combining semantic and keyword signals
+- E-commerce search
+- Enterprise search applications
+
+See [Hybrid Search](/guides/hybrid-search) guide for implementation details.
+
+## Troubleshooting
+
+<Warning>
+**Indices must be sorted:**
+If you get errors during upload, ensure sparse vector indices are sorted in ascending order:
+```json
+// Good
+{"indices": [10, 25, 77], "values": [0.42, 0.85, 0.31]}
+
+// Bad
+{"indices": [77, 10, 25], "values": [0.31, 0.42, 0.85]}
+```
+</Warning>
+
+<Warning>
+**Array length mismatch:**
+Ensure indices and values arrays have the same length:
+```json
+// Good
+{"indices": [10, 25], "values": [0.42, 0.85]}
+
+// Bad (will fail)
+{"indices": [10, 25, 77], "values": [0.42, 0.85]}
+```
+</Warning>
+
+## Next Steps
+
+- Learn about [hybrid search](/guides/hybrid-search) combining sparse and dense vectors
+- Explore [filtering](/guides/filtering-data) to refine sparse vector search
+- Check out [quantization](/guides/quantization) for dense vector compression

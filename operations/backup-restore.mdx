@@ -1,0 +1,518 @@
+---
+title: Backup & Restore
+description: Backup strategies, snapshot management, and disaster recovery for Qdrant
+---
+
+## Overview
+
+Qdrant provides multiple mechanisms for backing up your data, from full collection snapshots to shard-level backups. Understanding these options helps you implement a robust disaster recovery strategy.
+
+## Snapshot Types
+
+### Collection Snapshots
+
+Full backups of entire collections including all shards, configuration, and metadata.
+
+### Shard Snapshots
+
+Backups of individual shards, useful for distributed deployments and partial recovery.
+
+### Storage Snapshots
+
+Full instance snapshots containing all collections and cluster state.
+
+## Creating Snapshots
+
+### Collection Snapshot
+
+Create a snapshot of an entire collection:
+
+```bash
+curl -X POST http://localhost:6333/collections/{collection_name}/snapshots
+```
+
+**Response:**
+```json
+{
+  "result": {
+    "name": "my_collection-0-2024-03-15-10-30-00.snapshot",
+    "creation_time": "2024-03-15T10:30:00Z",
+    "size": 1048576000
+  },
+  "status": "ok",
+  "time": 1.234
+}
+```
+
+<Note>
+Snapshot names include the peer ID and timestamp: `{collection}-{peer_id}-{timestamp}.snapshot`
+</Note>
+
+### Shard Snapshot
+
+Create a snapshot of a specific shard:
+
+```bash
+curl -X POST http://localhost:6333/collections/{collection_name}/shards/{shard_id}/snapshots
+```
+
+### Full Storage Snapshot
+
+Create a snapshot of the entire Qdrant instance:
+
+```bash
+curl -X POST http://localhost:6333/snapshots
+```
+
+## Listing Snapshots
+
+### List Collection Snapshots
+
+```bash
+curl http://localhost:6333/collections/{collection_name}/snapshots
+```
+
+**Response:**
+```json
+{
+  "result": [
+    {
+      "name": "my_collection-0-2024-03-15-10-30-00.snapshot",
+      "creation_time": "2024-03-15T10:30:00Z",
+      "size": 1048576000
+    }
+  ],
+  "status": "ok"
+}
+```
+
+### List Shard Snapshots
+
+```bash
+curl http://localhost:6333/collections/{collection_name}/shards/{shard_id}/snapshots
+```
+
+### List All Snapshots
+
+```bash
+curl http://localhost:6333/snapshots
+```
+
+## Downloading Snapshots
+
+### Download Collection Snapshot
+
+```bash
+curl -o backup.snapshot \
+  http://localhost:6333/collections/{collection_name}/snapshots/{snapshot_name}
+```
+
+### Download Shard Snapshot
+
+```bash
+curl -o shard_backup.snapshot \
+  http://localhost:6333/collections/{collection_name}/shards/{shard_id}/snapshots/{snapshot_name}
+```
+
+### Download Storage Snapshot
+
+```bash
+curl -o full_backup.snapshot \
+  http://localhost:6333/snapshots/{snapshot_name}
+```
+
+## Snapshot Storage
+
+### Local Storage
+
+By default, snapshots are stored locally:
+
+```yaml
+# config/config.yaml
+storage:
+  snapshots_path: ./snapshots
+  
+  snapshots_config:
+    snapshots_storage: local
+```
+
+**Directory structure:**
+```
+snapshots/
+├── {collection_name}/
+│   ├── {collection_name}-0-2024-03-15-10-30-00.snapshot
+│   └── shards/
+│       └── {shard_id}/
+│           └── {shard_id}-2024-03-15-11-00-00.snapshot
+└── full-snapshot-2024-03-15-12-00-00.snapshot
+```
+
+### S3 Storage
+
+Store snapshots directly to S3:
+
+```yaml
+# config/config.yaml
+storage:
+  snapshots_config:
+    snapshots_storage: s3
+    s3_config:
+      bucket: my-qdrant-backups
+      region: us-east-1
+      access_key: ${AWS_ACCESS_KEY_ID}
+      secret_key: ${AWS_SECRET_ACCESS_KEY}
+      # Optional: custom endpoint for S3-compatible storage
+      # endpoint: https://s3.example.com
+```
+
+<Tip>
+When using S3 storage, snapshots are uploaded directly to S3 during creation, eliminating the need to manually transfer files.
+</Tip>
+
+## Restoring from Snapshots
+
+### Restore Collection
+
+Restore a collection from a local snapshot file:
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name}/snapshots/recover \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'snapshot=@backup.snapshot'
+```
+
+### Restore from URL
+
+Restore from a snapshot stored remotely:
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name}/snapshots/recover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "location": "https://example.com/backup.snapshot"
+  }'
+```
+
+### Restore from S3
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name}/snapshots/recover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "location": "s3://my-bucket/backups/my_collection.snapshot"
+  }'
+```
+
+### Recovery Priority
+
+Control snapshot download priority:
+
+```bash
+curl -X PUT http://localhost:6333/collections/{collection_name}/snapshots/recover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "location": "https://example.com/backup.snapshot",
+    "priority": "snapshot"  # "snapshot" or "replica"
+  }'
+```
+
+**Priority modes:**
+- `snapshot` - Prioritize snapshot recovery over shard transfers
+- `replica` - Prioritize shard transfers (default)
+
+## Backup Strategies
+
+### Full Backups
+
+Take complete snapshots of all collections:
+
+```bash
+#!/bin/bash
+# Backup all collections
+
+for collection in $(curl -s http://localhost:6333/collections | jq -r '.result.collections[].name')
+do
+  echo "Backing up $collection..."
+  curl -X POST http://localhost:6333/collections/$collection/snapshots
+  
+  # Wait for snapshot to complete
+  sleep 5
+  
+  # Get latest snapshot name
+  snapshot=$(curl -s http://localhost:6333/collections/$collection/snapshots | \
+    jq -r '.result[-1].name')
+  
+  # Download snapshot
+  curl -o "backups/${collection}_${snapshot}" \
+    http://localhost:6333/collections/$collection/snapshots/$snapshot
+done
+```
+
+### Incremental Backups
+
+Use shard snapshots for incremental backups in distributed mode:
+
+1. Create baseline full snapshot
+2. Periodically snapshot modified shards
+3. Track shard versions and changes
+
+### Scheduled Backups
+
+Cron job example for daily backups:
+
+```bash
+# /etc/cron.d/qdrant-backup
+0 2 * * * /usr/local/bin/qdrant-backup.sh
+```
+
+```bash
+#!/bin/bash
+# qdrant-backup.sh
+
+BACKUP_DIR="/var/backups/qdrant/$(date +%Y%m%d)"
+RETENTION_DAYS=30
+
+mkdir -p "$BACKUP_DIR"
+
+# Create full storage snapshot
+curl -X POST http://localhost:6333/snapshots
+
+# Download latest snapshot
+SNAPSHOT=$(curl -s http://localhost:6333/snapshots | jq -r '.result[-1].name')
+curl -o "$BACKUP_DIR/$SNAPSHOT" http://localhost:6333/snapshots/$SNAPSHOT
+
+# Clean up old backups
+find /var/backups/qdrant -type d -mtime +$RETENTION_DAYS -exec rm -rf {} +
+```
+
+## Disaster Recovery
+
+### Single Node Recovery
+
+1. **Stop Qdrant**
+   ```bash
+   systemctl stop qdrant
+   ```
+
+2. **Clear existing data** (optional)
+   ```bash
+   rm -rf /var/lib/qdrant/storage/*
+   ```
+
+3. **Start Qdrant**
+   ```bash
+   systemctl start qdrant
+   ```
+
+4. **Restore snapshots**
+   ```bash
+   for snapshot in /var/backups/qdrant/latest/*.snapshot; do
+     collection=$(basename $snapshot | cut -d'-' -f1)
+     curl -X PUT http://localhost:6333/collections/$collection/snapshots/recover \
+       -H 'Content-Type: multipart/form-data' \
+       -F "snapshot=@$snapshot"
+   done
+   ```
+
+### Cluster Recovery
+
+#### Recovery from Quorum Loss
+
+If you lose quorum (majority of nodes):
+
+1. **Stop all nodes**
+   ```bash
+   # On each node
+   systemctl stop qdrant
+   ```
+
+2. **Clear consensus state** on all nodes
+   ```bash
+   rm -rf /var/lib/qdrant/storage/.raft
+   ```
+
+3. **Bootstrap new cluster** from one node
+   ```bash
+   # On first node
+   ./qdrant --bootstrap
+   ```
+
+4. **Join other nodes**
+   ```bash
+   # On other nodes
+   ./qdrant --uri http://node1:6335
+   ```
+
+5. **Restore data** from snapshots
+
+#### Shard Recovery
+
+Recover a failed shard in a distributed deployment:
+
+```bash
+# Recover specific shard
+curl -X PUT http://localhost:6333/collections/{collection}/shards/{shard_id}/snapshots/recover \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "location": "s3://backups/shard_{shard_id}.snapshot"
+  }'
+```
+
+## Snapshot Monitoring
+
+Track snapshot operations using metrics:
+
+```promql
+# Snapshots currently being created
+snapshot_creation_running
+
+# Snapshots currently being recovered
+snapshot_recovery_running
+
+# Total snapshots created
+snapshot_created_total
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Regular Schedules" icon="calendar">
+    Automate daily snapshots with retention policies (e.g., 30 days).
+  </Card>
+  
+  <Card title="Off-site Storage" icon="cloud">
+    Store snapshots in S3 or another region for disaster recovery.
+  </Card>
+  
+  <Card title="Test Restores" icon="flask">
+    Regularly test restore procedures to ensure backups are valid.
+  </Card>
+  
+  <Card title="Monitor Size" icon="chart-line">
+    Track snapshot sizes over time to plan storage capacity.
+  </Card>
+</CardGroup>
+
+### Snapshot Performance
+
+<Tip>
+Use the `temp_path` configuration to store temporary snapshot files on fast storage:
+
+```yaml
+storage:
+  temp_path: /mnt/nvme/qdrant-temp
+```
+</Tip>
+
+### Listener Nodes
+
+In distributed deployments, use dedicated listener nodes for backups:
+
+```yaml
+# Listener node configuration
+storage:
+  node_type: "Listener"  # Receives updates but doesn't serve queries
+```
+
+Listener nodes:
+- Stay in sync with the cluster
+- Don't handle search traffic
+- Ideal for creating consistent backups without impacting production
+
+## Snapshot Format
+
+Qdrant snapshots are TAR archives containing:
+
+```
+snapshot.tar
+├── version                    # Storage version
+├── config.json               # Collection configuration
+├── payload_index_config.json # Payload index schema
+├── shard_key_mapping.json   # Shard key mappings (custom sharding)
+└── shards/
+    ├── 0/                    # Shard directory
+    │   ├── replica_state.json
+    │   └── segments/
+    │       └── ...
+    └── 1/
+        └── ...
+```
+
+<Note>
+Snapshot format is version-specific. Always use the same Qdrant version for restore, or upgrade after restoration.
+</Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Snapshot creation fails">
+    **Causes:**
+    - Insufficient disk space in `temp_path` or `snapshots_path`
+    - Collection is being heavily written to
+    - Filesystem permissions issues
+    
+    **Solutions:**
+    - Check disk space: `df -h`
+    - Verify permissions on snapshot directories
+    - Use `temp_path` on fast storage with ample space
+  </Accordion>
+
+  <Accordion title="Snapshot download times out">
+    **Causes:**
+    - Large snapshot size
+    - Network bandwidth limitations
+    
+    **Solutions:**
+    - Use S3 storage for large snapshots
+    - Increase HTTP client timeout
+    - Download directly from storage directory
+  </Accordion>
+
+  <Accordion title="Restore fails with version mismatch">
+    **Cause:**
+    Snapshot was created with a different Qdrant version.
+    
+    **Solution:**
+    Restore using the same version, then upgrade:
+    ```bash
+    # Use matching version
+    docker run -v ./snapshots:/snapshots qdrant/qdrant:v1.7.0
+    
+    # After restore, upgrade
+    docker run -v ./storage:/qdrant/storage qdrant/qdrant:latest
+    ```
+  </Accordion>
+
+  <Accordion title="S3 snapshot upload fails">
+    **Causes:**
+    - Invalid credentials
+    - Incorrect bucket name or region
+    - Network connectivity issues
+    
+    **Solutions:**
+    - Verify AWS credentials: `aws s3 ls s3://bucket-name`
+    - Check S3 configuration in Qdrant config
+    - Test network access to S3 endpoint
+  </Accordion>
+
+  <Accordion title="Partial snapshot recovery">
+    If only some shards recover successfully:
+    
+    1. Check logs for specific shard errors
+    2. Verify snapshot integrity
+    3. Try recovering failed shards individually
+    4. Check shard replica state in cluster
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line" href="/operations/monitoring">
+    Track snapshot operations with metrics
+  </Card>
+  
+  <Card title="Scaling" icon="arrows-maximize" href="/operations/scaling">
+    Plan backup strategy for scaled deployments
+  </Card>
+</CardGroup>

@@ -1,0 +1,96 @@
+---
+title: Delete Collection
+openapi: DELETE /collections/{name}
+---
+
+Delete a collection and all associated data.
+
+<Warning>
+  This operation is irreversible. All points, vectors, and payloads in the collection will be permanently deleted.
+</Warning>
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection to delete
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="timeout" type="integer">
+  Wait for operation commit timeout in seconds. If timeout is reached, request will return with service error.
+</ParamField>
+
+## Example Request
+
+```bash
+curl -X DELETE http://localhost:6333/collections/my-collection
+```
+
+### With Timeout
+
+```bash
+curl -X DELETE 'http://localhost:6333/collections/my-collection?timeout=60'
+```
+
+## Response
+
+<ResponseField name="result" type="boolean">
+  Returns `true` if the collection was deleted successfully
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "result": true,
+  "status": "ok",
+  "time": 0.045
+}
+```
+
+## Errors
+
+### Collection Not Found
+
+```json
+{
+  "status": {
+    "error": "Collection `my-collection` not found"
+  },
+  "time": 0.001
+}
+```
+
+### Timeout Error
+
+If the deletion takes longer than the specified timeout:
+
+```json
+{
+  "status": {
+    "error": "Operation timeout: collection deletion took longer than 60 seconds"
+  },
+  "time": 60.0
+}
+```
+
+### Collection In Use
+
+If the collection is being used by ongoing operations:
+
+```json
+{
+  "status": {
+    "error": "Cannot delete collection: operation in progress"
+  },
+  "time": 0.002
+}
+```
+
+## Notes
+
+- Deleting a collection also removes all associated aliases
+- In distributed mode, the collection is deleted from all nodes in the cluster
+- Large collections may take several seconds to delete
+- If the operation times out, the deletion may still complete in the background

@@ -1,0 +1,261 @@
+---
+title: Update Collection
+openapi: PATCH /collections/{name}
+---
+
+Update parameters of an existing collection. All fields are optional - only provided fields will be updated.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection to update
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="timeout" type="integer">
+  Wait for operation commit timeout in seconds. If timeout is reached, request will return with service error.
+</ParamField>
+
+## Request Body
+
+All fields are optional. Only the fields you want to update need to be provided.
+
+<ParamField body="vectors" type="object">
+  Map of vector data parameters to update for each named vector. To update parameters in a collection with a single unnamed vector, use an empty string as the name.
+  
+  <ParamField body="hnsw_config" type="object">
+    HNSW index configuration to update
+    
+    <ParamField body="m" type="integer">
+      Number of edges per node
+    </ParamField>
+    
+    <ParamField body="ef_construct" type="integer">
+      Number of neighbours to consider during index building
+    </ParamField>
+    
+    <ParamField body="full_scan_threshold" type="integer">
+      Threshold for full scan
+    </ParamField>
+  </ParamField>
+  
+  <ParamField body="quantization_config" type="object">
+    Quantization configuration to update
+  </ParamField>
+  
+  <ParamField body="on_disk" type="boolean">
+    Whether to store vectors on disk
+  </ParamField>
+</ParamField>
+
+<ParamField body="optimizers_config" type="object">
+  Optimizers configuration to update. This operation is blocking - it will only proceed once all current optimizations are complete.
+  
+  <ParamField body="deleted_threshold" type="number">
+    Threshold for triggering optimization based on deleted points ratio
+  </ParamField>
+  
+  <ParamField body="vacuum_min_vector_number" type="integer">
+    Minimum number of vectors in a segment before optimization
+  </ParamField>
+  
+  <ParamField body="default_segment_number" type="integer">
+    Default number of segments
+  </ParamField>
+  
+  <ParamField body="max_segment_size" type="integer">
+    Maximum size of a segment in KB
+  </ParamField>
+  
+  <ParamField body="memmap_threshold" type="integer">
+    Threshold for memory mapping
+  </ParamField>
+  
+  <ParamField body="indexing_threshold" type="integer">
+    Threshold for indexing vectors
+  </ParamField>
+  
+  <ParamField body="flush_interval_sec" type="integer">
+    Interval between automatic flushes in seconds
+  </ParamField>
+  
+  <ParamField body="max_optimization_threads" type="integer">
+    Maximum number of threads for optimization
+  </ParamField>
+</ParamField>
+
+<ParamField body="params" type="object">
+  Collection base parameters to update
+  
+  <ParamField body="replication_factor" type="integer">
+    Number of replicas for each shard
+  </ParamField>
+  
+  <ParamField body="write_consistency_factor" type="integer">
+    Consistency factor for write operations
+  </ParamField>
+  
+  <ParamField body="read_fan_out_factor" type="integer">
+    Fan-out factor for read operations
+  </ParamField>
+</ParamField>
+
+<ParamField body="hnsw_config" type="object">
+  HNSW parameters to update for the collection index
+</ParamField>
+
+<ParamField body="quantization_config" type="object">
+  Quantization parameters to update
+</ParamField>
+
+<ParamField body="sparse_vectors" type="object">
+  Map of sparse vector data parameters to update for each sparse vector
+</ParamField>
+
+<ParamField body="strict_mode_config" type="object">
+  Strict mode configuration to update
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Metadata to update for the collection. If provided, this will merge with existing metadata. To remove metadata, set it to an empty object `{}`.
+</ParamField>
+
+## Example Requests
+
+### Update HNSW Configuration
+
+```bash
+curl -X PATCH http://localhost:6333/collections/my-collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "": {
+        "hnsw_config": {
+          "m": 32,
+          "ef_construct": 123
+        }
+      }
+    }
+  }'
+```
+
+### Update Optimizers Configuration
+
+```bash
+curl -X PATCH http://localhost:6333/collections/my-collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "optimizers_config": {
+      "default_segment_number": 6,
+      "indexing_threshold": 10000
+    }
+  }'
+```
+
+### Update Named Vector Quantization
+
+```bash
+curl -X PATCH http://localhost:6333/collections/multi-vector \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "image": {
+        "quantization_config": {
+          "scalar": {
+            "type": "int8",
+            "quantile": 0.8
+          }
+        }
+      }
+    }
+  }'
+```
+
+### Update Collection Metadata
+
+```bash
+curl -X PATCH http://localhost:6333/collections/my-collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "metadata": {
+      "model": "text-embedding-ada-002",
+      "created_at": "2024-03-15T10:30:00Z",
+      "version": "1.0"
+    }
+  }'
+```
+
+### Update Sparse Vector Index
+
+```bash
+curl -X PATCH http://localhost:6333/collections/my-collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "sparse_vectors": {
+      "sparse-text": {
+        "index": {
+          "on_disk": true
+        }
+      }
+    }
+  }'
+```
+
+## Response
+
+<ResponseField name="result" type="boolean">
+  Returns `true` if the collection was updated successfully
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "result": true,
+  "status": "ok",
+  "time": 0.012
+}
+```
+
+## Errors
+
+### Collection Not Found
+
+```json
+{
+  "status": {
+    "error": "Collection `my-collection` not found"
+  },
+  "time": 0.001
+}
+```
+
+### Invalid Configuration
+
+```json
+{
+  "status": {
+    "error": "Invalid HNSW configuration: m must be greater than 0"
+  },
+  "time": 0.001
+}
+```
+
+### Timeout Error
+
+```json
+{
+  "status": {
+    "error": "Operation timeout: update took longer than 60 seconds"
+  },
+  "time": 60.0
+}
+```
+
+## Notes
+
+- Updates are applied atomically - either all changes succeed or none are applied
+- The `optimizers_config` update is blocking and will wait for ongoing optimizations to complete
+- Metadata updates are merged with existing metadata; use an empty object to clear all metadata
+- Vector configuration updates only affect new segments; existing segments retain their configuration until rebuilt

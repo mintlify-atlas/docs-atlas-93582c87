@@ -1,0 +1,331 @@
+---
+title: Collection Aliases
+description: Manage collection aliases for flexible collection references
+---
+
+Aliases allow you to create alternative names for collections. This is useful for:
+
+- Zero-downtime collection updates (create new collection, switch alias)
+- A/B testing different collection configurations
+- Simplified client code that doesn't need to know exact collection names
+
+## Update Aliases
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:6333/collections/aliases \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "actions": [
+      {
+        "create_alias": {
+          "collection_name": "my-collection",
+          "alias_name": "production"
+        }
+      }
+    ]
+  }'
+```
+</CodeGroup>
+
+### Request Body
+
+<ParamField body="actions" type="array" required>
+  Array of alias operations to perform. All operations are applied atomically.
+</ParamField>
+
+### Alias Operations
+
+#### Create Alias
+
+Create a new alias for a collection:
+
+```json
+{
+  "create_alias": {
+    "collection_name": "my-collection",
+    "alias_name": "production"
+  }
+}
+```
+
+<ParamField body="collection_name" type="string" required>
+  Name of the existing collection
+</ParamField>
+
+<ParamField body="alias_name" type="string" required>
+  Name for the alias
+</ParamField>
+
+#### Delete Alias
+
+Remove an existing alias:
+
+```json
+{
+  "delete_alias": {
+    "alias_name": "production"
+  }
+}
+```
+
+<ParamField body="alias_name" type="string" required>
+  Name of the alias to delete
+</ParamField>
+
+#### Rename Alias
+
+Change an alias to point to a different name:
+
+```json
+{
+  "rename_alias": {
+    "old_alias_name": "production",
+    "new_alias_name": "production-v2"
+  }
+}
+```
+
+<ParamField body="old_alias_name" type="string" required>
+  Current alias name
+</ParamField>
+
+<ParamField body="new_alias_name" type="string" required>
+  New alias name
+</ParamField>
+
+### Response
+
+<ResponseField name="result" type="boolean">
+  Returns `true` if all alias operations were successful
+</ResponseField>
+
+```json
+{
+  "result": true,
+  "status": "ok",
+  "time": 0.003
+}
+```
+
+## List All Aliases
+
+Get a list of all collection aliases in the system.
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:6333/aliases
+```
+</CodeGroup>
+
+### Response
+
+<ResponseField name="result" type="object">
+  <ResponseField name="aliases" type="array">
+    Array of alias descriptions
+    
+    <ResponseField name="alias_name" type="string">
+      Name of the alias
+    </ResponseField>
+    
+    <ResponseField name="collection_name" type="string">
+      Name of the collection the alias points to
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+```json
+{
+  "result": {
+    "aliases": [
+      {
+        "alias_name": "production",
+        "collection_name": "my-collection-v2"
+      },
+      {
+        "alias_name": "staging",
+        "collection_name": "my-collection-v3"
+      }
+    ]
+  },
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+## List Collection Aliases
+
+Get all aliases for a specific collection.
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:6333/collections/my-collection/aliases
+```
+</CodeGroup>
+
+### Path Parameters
+
+<ParamField path="collection_name" type="string" required>
+  Name of the collection
+</ParamField>
+
+### Response
+
+```json
+{
+  "result": {
+    "aliases": [
+      {
+        "alias_name": "production",
+        "collection_name": "my-collection"
+      },
+      {
+        "alias_name": "v1",
+        "collection_name": "my-collection"
+      }
+    ]
+  },
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+## Examples
+
+### Zero-Downtime Collection Update
+
+```bash
+# 1. Create new collection with updated configuration
+curl -X PUT http://localhost:6333/collections/my-collection-v2 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 768,
+      "distance": "Cosine"
+    }
+  }'
+
+# 2. Index data into new collection
+# ... upload points ...
+
+# 3. Switch production alias atomically
+curl -X POST http://localhost:6333/collections/aliases \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "actions": [
+      {
+        "delete_alias": {
+          "alias_name": "production"
+        }
+      },
+      {
+        "create_alias": {
+          "collection_name": "my-collection-v2",
+          "alias_name": "production"
+        }
+      }
+    ]
+  }'
+
+# 4. Delete old collection
+curl -X DELETE http://localhost:6333/collections/my-collection
+```
+
+### A/B Testing
+
+```bash
+# Create two collections with different configurations
+curl -X PUT http://localhost:6333/collections/variant-a ...
+curl -X PUT http://localhost:6333/collections/variant-b ...
+
+# Create aliases for easy switching
+curl -X POST http://localhost:6333/collections/aliases \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "actions": [
+      {
+        "create_alias": {
+          "collection_name": "variant-a",
+          "alias_name": "experiment-group-1"
+        }
+      },
+      {
+        "create_alias": {
+          "collection_name": "variant-b",
+          "alias_name": "experiment-group-2"
+        }
+      }
+    ]
+  }'
+```
+
+### Batch Alias Operations
+
+```bash
+curl -X POST http://localhost:6333/collections/aliases \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "actions": [
+      {
+        "create_alias": {
+          "collection_name": "main-v3",
+          "alias_name": "production"
+        }
+      },
+      {
+        "create_alias": {
+          "collection_name": "main-v3",
+          "alias_name": "stable"
+        }
+      },
+      {
+        "delete_alias": {
+          "alias_name": "old-production"
+        }
+      }
+    ]
+  }'
+```
+
+## Errors
+
+### Alias Already Exists
+
+```json
+{
+  "status": {
+    "error": "Alias `production` already exists"
+  },
+  "time": 0.001
+}
+```
+
+### Collection Not Found
+
+```json
+{
+  "status": {
+    "error": "Collection `my-collection` not found"
+  },
+  "time": 0.001
+}
+```
+
+### Alias Not Found
+
+```json
+{
+  "status": {
+    "error": "Alias `production` not found"
+  },
+  "time": 0.001
+}
+```
+
+## Notes
+
+- Alias operations are atomic - all actions in a single request either succeed or fail together
+- An alias can only point to one collection at a time
+- Multiple aliases can point to the same collection
+- Aliases can be used in place of collection names in most API endpoints
+- Deleting a collection does not automatically delete its aliases

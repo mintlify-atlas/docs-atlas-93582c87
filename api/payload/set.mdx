@@ -1,0 +1,151 @@
+---
+title: Set Payload
+openapi: POST /collections/{collection_name}/points/payload
+---
+
+Set payload values for specific points in a collection. This operation allows you to add or update payload fields for selected points.
+
+## Use Cases
+
+- Add metadata to points after initial upload
+- Update existing payload fields with new values
+- Set payload values for points matching filter conditions
+- Incrementally build point metadata as data becomes available
+
+## Request Body
+
+<ParamField body="payload" type="object" required>
+  The payload object containing key-value pairs to set. Values can be of any JSON type including strings, numbers, booleans, objects, or arrays.
+  
+  ```json
+  {
+    "city": "London",
+    "price": 120.5,
+    "available": true,
+    "tags": ["new", "featured"]
+  }
+  ```
+</ParamField>
+
+<ParamField body="points" type="array">
+  List of point IDs to update. Either `points` or `filter` must be provided.
+  
+  ```json
+  [1, 2, 3, 42]
+  ```
+</ParamField>
+
+<ParamField body="filter" type="object">
+  Filter conditions to select points. All points matching the filter will have the payload set. Either `points` or `filter` must be provided.
+  
+  ```json
+  {
+    "must": [
+      {
+        "key": "city",
+        "match": {
+          "value": "London"
+        }
+      }
+    ]
+  }
+  ```
+</ParamField>
+
+<ParamField body="key" type="string">
+  Optional path to a nested field using JSON path notation (e.g., `metadata.location`). If specified, the payload will be set at this path rather than at the root level.
+</ParamField>
+
+<ParamField body="shard_key" type="string | array">
+  Optional shard key to target specific shards in a distributed setup.
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="wait" type="boolean" default="true">
+  If `true`, wait for the operation to complete before returning. If `false`, the operation runs in the background.
+</ParamField>
+
+<ParamField query="ordering" type="string">
+  Write ordering guarantees for the operation. Options: `weak`, `medium`, `strong`.
+</ParamField>
+
+<ParamField query="timeout" type="integer">
+  Operation timeout in seconds.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  Update operation result
+  
+  <ResponseField name="operation_id" type="integer">
+    Sequential number of the operation
+  </ResponseField>
+  
+  <ResponseField name="status" type="string">
+    Operation status: `completed` or `acknowledged`
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Set Payload by Point IDs
+
+```json
+{
+  "payload": {
+    "city": "London",
+    "price": 120.5
+  },
+  "points": [1, 2, 3]
+}
+```
+
+### Set Payload by Filter
+
+```json
+{
+  "payload": {
+    "category": "premium"
+  },
+  "filter": {
+    "must": [
+      {
+        "key": "price",
+        "range": {
+          "gte": 100
+        }
+      }
+    ]
+  }
+}
+```
+
+### Set Nested Payload Field
+
+```json
+{
+  "payload": {
+    "temperature": 22.5
+  },
+  "points": [1, 2],
+  "key": "metadata.sensor"
+}
+```
+
+## Behavior
+
+- If a payload field already exists, it will be **merged** with the new values
+- New fields are added to existing payload
+- Existing fields are updated with new values
+- Other payload fields remain unchanged
+- Use [Overwrite Payload](/api/payload/overwrite) to replace the entire payload instead of merging

@@ -1,0 +1,122 @@
+---
+title: Deployment Overview
+description: Learn about different Qdrant deployment options
+---
+
+Qdrant offers flexible deployment options to suit different use cases, from development to production environments.
+
+## Deployment Options
+
+### Docker
+
+The quickest way to get started with Qdrant. Suitable for:
+- Local development
+- Testing and prototyping
+- Single-node production deployments
+- CI/CD environments
+
+[Docker Deployment Guide](/deployment/docker)
+
+### Kubernetes
+
+Production-ready orchestration for Qdrant using Kubernetes and Helm. Suitable for:
+- Production deployments requiring high availability
+- Auto-scaling workloads
+- Multi-tenant environments
+- Cloud-native infrastructure
+
+[Kubernetes Deployment Guide](/deployment/kubernetes)
+
+### Distributed Cluster
+
+Multi-node Qdrant cluster for horizontal scaling and high availability. Features:
+- Distributed consensus using Raft protocol
+- Automatic shard replication
+- Load balancing across nodes
+- Fault tolerance
+
+[Cluster Setup Guide](/deployment/cluster-setup)
+
+### Qdrant Cloud
+
+Fully managed Qdrant service with:
+- Automatic scaling
+- Built-in monitoring and alerts
+- Managed backups
+- Free tier available
+
+[Visit Qdrant Cloud](https://cloud.qdrant.io/)
+
+## Architecture Components
+
+### Storage Layer
+
+Qdrant uses a persistent storage architecture:
+- **Storage path**: Vector data and indices (`/qdrant/storage`)
+- **Snapshots path**: Backup snapshots (`/qdrant/snapshots`)
+- **WAL**: Write-ahead log for durability
+
+### Network Ports
+
+Qdrant uses three main ports:
+
+| Port | Protocol | Purpose |
+|------|----------|----------|
+| 6333 | HTTP/HTTPS | REST API and Web UI |
+| 6334 | gRPC | gRPC API (optional) |
+| 6335 | gRPC | Internal cluster communication (P2P) |
+
+### Configuration
+
+Qdrant configuration can be managed through:
+- YAML configuration files
+- Environment variables (prefixed with `QDRANT__`)
+- Command-line arguments
+
+[Configuration Reference](/deployment/configuration)
+
+## Security Considerations
+
+<Warning>
+By default, Qdrant starts without authentication. Never expose an unsecured instance to public networks.
+</Warning>
+
+Essential security features:
+- **API Keys**: Read-write and read-only keys
+- **TLS/HTTPS**: Encrypted connections
+- **JWT RBAC**: Fine-grained access control
+- **mTLS**: Mutual TLS for cluster communication
+
+[Security Guide](/deployment/security)
+
+## Production Checklist
+
+Before deploying Qdrant to production:
+
+- [ ] Enable authentication (API keys or JWT RBAC)
+- [ ] Configure TLS/HTTPS
+- [ ] Set up persistent storage volumes
+- [ ] Configure backups/snapshots
+- [ ] Set resource limits (CPU, memory)
+- [ ] Enable monitoring and metrics
+- [ ] Configure logging
+- [ ] Set up health checks
+- [ ] Plan for disaster recovery
+- [ ] Review security settings
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Docker Deployment" icon="docker" href="/deployment/docker">
+    Quick start with Docker containers
+  </Card>
+  <Card title="Kubernetes" icon="dharmachakra" href="/deployment/kubernetes">
+    Production deployment with Helm
+  </Card>
+  <Card title="Configuration" icon="gear" href="/deployment/configuration">
+    Complete configuration reference
+  </Card>
+  <Card title="Security" icon="shield" href="/deployment/security">
+    Secure your Qdrant instance
+  </Card>
+</CardGroup>

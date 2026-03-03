@@ -1,0 +1,233 @@
+---
+title: Health Check Endpoints
+api: GET /healthz
+---
+
+Kubernetes-compatible health check endpoints for monitoring Qdrant service availability.
+
+## Overview
+
+Qdrant provides multiple health check endpoints designed for different monitoring scenarios:
+
+- **`/`** - Root endpoint (returns basic health)
+- **`/healthz`** - Basic liveness check
+- **`/livez`** - Kubernetes liveness probe
+- **`/readyz`** - Kubernetes readiness probe with shard health
+
+## Endpoints
+
+### GET /healthz
+
+Basic health check endpoint that always returns success if the service is running.
+
+**Response:**
+```
+HTTP/1.1 200 OK
+Content-Type: text/plain
+
+healthz check passed
+```
+
+### GET /livez
+
+Liveness probe endpoint - identical to `/healthz`. Returns `200 OK` if the process is alive.
+
+**Response:**
+```
+HTTP/1.1 200 OK
+Content-Type: text/plain
+
+healthz check passed
+```
+
+### GET /readyz
+
+Advanced readiness probe that performs comprehensive health checks:
+
+1. **Cluster Synchronization**: Waits for peer to catch up with cluster consensus
+2. **Shard Health**: Validates all local shards are in healthy state
+3. **Bootstrap Check**: Optionally waits for cluster formation
+
+**Success Response:**
+```
+HTTP/1.1 200 OK
+Content-Type: text/plain
+
+all shards are ready
+```
+
+**Not Ready Response:**
+```
+HTTP/1.1 503 Service Unavailable
+Content-Type: text/plain
+
+some shards are not ready
+```
+
+## Readiness Check Implementation
+
+The `/readyz` endpoint implements a sophisticated health check process:
+
+### 1. Bootstrap Wait (Optional)
+
+If started with `--bootstrap` flag, waits for additional peers to join:
+
+```rust
+while self.consensus_state.peer_count() <= 1 {
+    self.check_ready_signal.notified().await;
+}
+```
+
+### 2. Consensus Synchronization
+
+Ensures the local peer has caught up with cluster consensus:
+
+```rust
+while self.commit_index() < cluster_commit_index {
+    self.check_ready_signal.notified().await;
+    
+    if self.consensus_state.peer_count() <= 1 {
+        self.set_ready();
+        return;
+    }
+}
+```
+
+The health checker:
+- Queries majority of peers for their commit index
+- Compares local commit index with cluster maximum
+- Waits until local peer catches up
+
+### 3. Shard Health Verification
+
+Checks all local shard replicas for healthy state:
+
+```rust
+for collection_pass in &collections {
+    let state = collection.state().await;
+    
+    for (&shard, info) in state.shards.iter() {
+        if let Some(state) = info.replicas.get(&this_peer_id) {
+            if !state.is_healthy() {
+                unhealthy_shards.insert(shard);
+            }
+        }
+    }
+}
+```
+
+Shards are considered **unhealthy** if they are:
+- In transfer state
+- Recovering from failure
+- Not yet initialized
+
+Shards in **resharding state** are excluded from health checks as they require external coordination.
+
+### 4. Timeout Behavior
+
+The readiness check has a built-in timeout:
+
+```rust
+const READY_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
+```
+
+If checks don't complete within 500ms, the endpoint returns not ready.
+
+## Kubernetes Configuration
+
+### Liveness Probe
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: 6333
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+```
+
+### Readiness Probe
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 6333
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  successThreshold: 1
+  failureThreshold: 3
+```
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Load Balancer Health" icon="scale-balanced">
+    Use `/healthz` or `/livez` for simple load balancer health checks
+  </Card>
+  
+  <Card title="Kubernetes Readiness" icon="kubernetes">
+    Use `/readyz` to ensure pods only receive traffic when fully synchronized
+  </Card>
+  
+  <Card title="Rolling Updates" icon="arrows-rotate">
+    `/readyz` prevents traffic to pods that haven't caught up after restart
+  </Card>
+  
+  <Card title="Cluster Bootstrap" icon="rocket">
+    With `--wait-for-bootstrap`, `/readyz` ensures minimum cluster size
+  </Card>
+</CardGroup>
+
+## Example Requests
+
+<CodeGroup>
+```bash Basic Health Check
+curl http://localhost:6333/healthz
+```
+
+```bash Readiness Check
+curl http://localhost:6333/readyz
+# Returns 200 if ready, 503 if not ready
+```
+
+```bash Check with Status Code
+curl -w "\n%{http_code}\n" http://localhost:6333/readyz
+```
+
+```python Python Health Monitor
+import requests
+import time
+
+def wait_for_ready(url="http://localhost:6333", timeout=60):
+    """Wait for Qdrant to be ready."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            response = requests.get(f"{url}/readyz")
+            if response.status_code == 200:
+                print("Qdrant is ready!")
+                return True
+        except requests.RequestException:
+            pass
+        time.sleep(1)
+    return False
+
+wait_for_ready()
+```
+</CodeGroup>
+
+## Implementation Reference
+
+The health check system is implemented in:
+- `src/common/health.rs` - HealthChecker task and readiness logic
+- `src/actix/api/service_api.rs:145-171` - HTTP endpoint handlers
+
+## Related Endpoints
+
+- [Cluster Status](/api/cluster/status) - Detailed cluster health information
+- [Metrics](/api/service/metrics) - Prometheus metrics including health indicators
+- [Telemetry](/api/service/telemetry) - Comprehensive system telemetry

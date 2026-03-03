@@ -1,0 +1,428 @@
+---
+title: Audit Logging
+description: Track and monitor access to your Qdrant deployment with structured audit logs
+---
+
+Audit logging provides detailed records of all access attempts to your Qdrant cluster. Essential for security compliance, debugging, and monitoring.
+
+## Configuration
+
+Enable audit logging in your Qdrant configuration:
+
+```yaml
+# config/production.yaml
+audit:
+  enabled: true
+  dir: ./storage/audit
+  rotation: daily
+  max_log_files: 7
+  trust_forwarded_headers: false
+```
+
+<ParamField path="enabled" type="boolean" default="false">
+  Enable audit logging
+</ParamField>
+
+<ParamField path="dir" type="string" default="./storage/audit">
+  Directory to write audit log files
+</ParamField>
+
+<ParamField path="rotation" type="string" default="daily">
+  Log rotation interval
+  - `daily` - Create new log file each day
+  - `hourly` - Create new log file each hour
+</ParamField>
+
+<ParamField path="max_log_files" type="integer" default="7">
+  Maximum number of rotated log files to retain. Older files are automatically deleted.
+</ParamField>
+
+<ParamField path="trust_forwarded_headers" type="boolean" default="false">
+  Trust `X-Forwarded-For` header for client IP address.
+  
+  <Warning>
+  Only enable when running behind a trusted reverse proxy or load balancer.
+  </Warning>
+</ParamField>
+
+## Audit Log Format
+
+Audit logs are written as newline-delimited JSON (NDJSON):
+
+```json
+{"timestamp":"2026-03-03T10:15:30.123Z","method":"search","auth_type":"jwt","subject":"user@example.com","remote":"192.168.1.100","collection":"documents","result":"ok"}
+{"timestamp":"2026-03-03T10:15:31.456Z","method":"upsert","auth_type":"api_key","remote":"192.168.1.101","collection":"embeddings","result":"denied","error":"Write access to collection 'embeddings' is required"}
+```
+
+### Log Entry Fields
+
+<ParamField path="timestamp" type="string">
+  ISO 8601 timestamp when the request was processed
+</ParamField>
+
+<ParamField path="method" type="string">
+  API method or handler name (e.g., `search`, `upsert`, `create_collection`)
+</ParamField>
+
+<ParamField path="auth_type" type="string">
+  Authentication method used:
+  - `jwt` - JWT token authentication
+  - `api_key` - Static API key authentication
+  - `none` - No authentication configured
+</ParamField>
+
+<ParamField path="subject" type="string" optional>
+  The `subject` field from JWT token, if present
+</ParamField>
+
+<ParamField path="remote" type="string" optional>
+  Client IP address. Uses `X-Forwarded-For` if `trust_forwarded_headers` is enabled.
+</ParamField>
+
+<ParamField path="collection" type="string" optional>
+  Collection name for collection-scoped operations
+</ParamField>
+
+<ParamField path="result" type="string">
+  Access check result:
+  - `ok` - Access granted
+  - `denied` - Access denied
+</ParamField>
+
+<ParamField path="error" type="string" optional>
+  Error message when access is denied
+</ParamField>
+
+## Log Rotation
+
+Audit logs are automatically rotated based on the configured interval:
+
+### Daily Rotation
+
+```yaml
+audit:
+  rotation: daily
+  max_log_files: 7
+```
+
+Log files:
+```
+storage/audit/audit.2026-03-03.log
+storage/audit/audit.2026-03-02.log
+storage/audit/audit.2026-03-01.log
+...
+```
+
+After 7 days, `audit.2026-02-25.log` is automatically deleted.
+
+### Hourly Rotation
+
+```yaml
+audit:
+  rotation: hourly
+  max_log_files: 24
+```
+
+Log files:
+```
+storage/audit/audit.2026-03-03-10.log
+storage/audit/audit.2026-03-03-09.log
+storage/audit/audit.2026-03-03-08.log
+...
+```
+
+<Note>
+Log rotation happens automatically when a new time period begins. Active logs are never deleted.
+</Note>
+
+## Analyzing Audit Logs
+
+### Using jq
+
+Query audit logs with jq for analysis:
+
+```bash
+# Find all denied access attempts
+cat storage/audit/audit.*.log | jq 'select(.result == "denied")'
+
+# Count requests by user
+cat storage/audit/audit.*.log | jq -r '.subject' | sort | uniq -c
+
+# Find all operations on a specific collection
+cat storage/audit/audit.*.log | jq 'select(.collection == "documents")'
+
+# Get access denials in the last hour
+cat storage/audit/audit.$(date +%Y-%m-%d-%H).log | jq 'select(.result == "denied")'
+```
+
+### Using grep
+
+Quick searches with grep:
+
+```bash
+# Find all JWT authentication failures
+grep '"auth_type":"jwt"' storage/audit/*.log | grep '"result":"denied"'
+
+# Find requests from specific IP
+grep '"remote":"192.168.1.100"' storage/audit/*.log
+
+# Find all write operations
+grep -E '"method":"(upsert|delete|update)"' storage/audit/*.log
+```
+
+### Aggregating with awk
+
+Generate statistics:
+
+```bash
+# Count total requests
+wc -l storage/audit/audit.*.log
+
+# Count successful vs denied
+cat storage/audit/audit.*.log | \
+  jq -r '.result' | \
+  sort | uniq -c
+
+# Top 10 most active users
+cat storage/audit/audit.*.log | \
+  jq -r '.subject' | \
+  sort | uniq -c | \
+  sort -rn | \
+  head -10
+```
+
+## Integration Examples
+
+### Send to Elasticsearch
+
+Forward audit logs to Elasticsearch for centralized logging:
+
+```bash
+#!/bin/bash
+# Stream audit logs to Elasticsearch
+tail -f storage/audit/audit.*.log | while read line; do
+  curl -X POST 'http://elasticsearch:9200/qdrant-audit/_doc' \
+    -H 'Content-Type: application/json' \
+    -d "$line"
+done
+```
+
+### Send to Splunk
+
+Forward to Splunk using HTTP Event Collector:
+
+```bash
+#!/bin/bash
+tail -f storage/audit/audit.*.log | while read line; do
+  curl -X POST 'https://splunk:8088/services/collector/event' \
+    -H 'Authorization: Splunk YOUR-TOKEN' \
+    -d "{\"event\": $line}"
+done
+```
+
+### CloudWatch Logs
+
+Send audit logs to AWS CloudWatch:
+
+```python
+import boto3
+import json
+import time
+
+logs = boto3.client('logs')
+log_group = '/qdrant/audit'
+log_stream = 'production'
+
+with open('storage/audit/audit.log') as f:
+    for line in f:
+        event = json.loads(line)
+        logs.put_log_events(
+            logGroupName=log_group,
+            logStreamName=log_stream,
+            logEvents=[{
+                'timestamp': int(time.time() * 1000),
+                'message': line
+            }]
+        )
+```
+
+## Monitoring and Alerting
+
+### Failed Authentication Alerts
+
+Alert on repeated authentication failures:
+
+```bash
+#!/bin/bash
+# Check for > 10 failed auth attempts in last hour
+DENIED_COUNT=$(cat storage/audit/audit.$(date +%Y-%m-%d-%H).log | \
+  jq 'select(.result == "denied")' | wc -l)
+
+if [ $DENIED_COUNT -gt 10 ]; then
+  echo "ALERT: $DENIED_COUNT failed auth attempts detected"
+  # Send alert (email, Slack, PagerDuty, etc.)
+fi
+```
+
+### Unusual Access Patterns
+
+Detect access from new IPs:
+
+```bash
+#!/bin/bash
+# Compare today's IPs to historical baseline
+KNOWN_IPS="known_ips.txt"
+cat storage/audit/audit.$(date +%Y-%m-%d).log | \
+  jq -r '.remote' | \
+  sort -u | \
+  grep -v -f $KNOWN_IPS
+```
+
+### Performance Monitoring
+
+Track operation volume:
+
+```bash
+#!/bin/bash
+# Count operations per hour
+for hour in {00..23}; do
+  count=$(cat storage/audit/audit.$(date +%Y-%m-%d)-$hour.log 2>/dev/null | wc -l)
+  echo "Hour $hour: $count operations"
+done
+```
+
+## Compliance Requirements
+
+Audit logging helps meet common compliance requirements:
+
+### SOC 2
+
+Audit logs provide:
+- User access tracking
+- Change accountability
+- Security incident investigation
+
+### GDPR
+
+Audit logs enable:
+- Data access logging (Article 30)
+- Breach detection (Article 33)
+- Subject access requests (Article 15)
+
+### HIPAA
+
+Audit logs support:
+- Access control (164.312(a))
+- Audit controls (164.312(b))
+- Integrity controls (164.312(c))
+
+<Note>
+Retain audit logs for the period required by your compliance framework (typically 1-7 years).
+</Note>
+
+## Performance Impact
+
+Audit logging has minimal performance impact:
+
+- **Write overhead**: < 1ms per request (asynchronous)
+- **Storage**: ~200 bytes per log entry
+- **CPU**: Negligible (background worker thread)
+
+### Resource Requirements
+
+Estimate storage needs:
+
+```
+Daily requests: 10,000,000
+Log entry size: 200 bytes
+Daily storage: 2 GB
+Weekly storage: 14 GB
+```
+
+## Security Considerations
+
+### Log File Permissions
+
+Restrict access to audit logs:
+
+```bash
+chmod 600 storage/audit/*.log
+chown qdrant:qdrant storage/audit/*.log
+```
+
+### Tamper Prevention
+
+Protect audit logs from modification:
+
+```bash
+# Make logs append-only
+chattr +a storage/audit/audit.*.log
+
+# Archive to immutable storage
+aws s3 cp storage/audit/ s3://audit-archive/ \
+  --recursive \
+  --storage-class GLACIER
+```
+
+### Sensitive Data
+
+Audit logs do NOT contain:
+- Vector data
+- Payload contents
+- API keys or passwords
+- JWT token contents (only `subject` claim)
+
+<Warning>
+Audit logs contain IP addresses and usernames. Treat as sensitive data and protect accordingly.
+</Warning>
+
+## Troubleshooting
+
+### No Logs Generated
+
+Check configuration:
+
+```bash
+# Verify audit is enabled
+cat config/production.yaml | grep -A 5 audit
+
+# Check directory permissions
+ls -ld storage/audit
+
+# Verify Qdrant has write access
+sudo -u qdrant touch storage/audit/test.log
+```
+
+### Missing Entries
+
+Internal cluster operations are not logged:
+
+```rust
+// lib/storage/src/rbac/auth.rs:102
+if !is_audit_enabled() || self.auth_type == AuthType::Internal {
+    return;
+}
+```
+
+Only external API requests are audited.
+
+### Large Log Files
+
+Reduce log volume:
+
+```yaml
+audit:
+  rotation: hourly  # More frequent rotation
+  max_log_files: 24  # Keep last 24 hours only
+```
+
+Or implement log shipping to external system and reduce retention.
+
+## Source Code References
+
+Key implementation files:
+
+- `lib/storage/src/audit.rs:24` - Audit configuration
+- `lib/storage/src/audit.rs:72` - Audit event structure
+- `lib/storage/src/audit.rs:166` - Logger initialization
+- `lib/storage/src/rbac/auth.rs:96` - Audit emission

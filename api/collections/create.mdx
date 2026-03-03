@@ -1,0 +1,203 @@
+---
+title: Create Collection
+openapi: PUT /collections/{name}
+---
+
+Creates a new collection with the specified configuration.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection to create
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="timeout" type="integer">
+  Wait for operation commit timeout in seconds. If timeout is reached, request will return with service error.
+</ParamField>
+
+## Request Body
+
+<ParamField body="vectors" type="object" required>
+  Vector configuration for the collection. Can be a single vector config or a named map of vector configs.
+  
+  <ParamField body="size" type="integer" required>
+    Size of the vector
+  </ParamField>
+  
+  <ParamField body="distance" type="string" required>
+    Distance metric: `Cosine`, `Euclid`, `Dot`, or `Manhattan`
+  </ParamField>
+  
+  <ParamField body="on_disk" type="boolean">
+    Store vectors on disk. Default: `false`
+  </ParamField>
+  
+  <ParamField body="hnsw_config" type="object">
+    HNSW index configuration
+    
+    <ParamField body="m" type="integer">
+      Number of edges per node. Default: `16`
+    </ParamField>
+    
+    <ParamField body="ef_construct" type="integer">
+      Number of neighbours to consider during index building. Default: `100`
+    </ParamField>
+  </ParamField>
+  
+  <ParamField body="quantization_config" type="object">
+    Quantization configuration to reduce memory usage
+  </ParamField>
+</ParamField>
+
+<ParamField body="shard_number" type="integer">
+  Number of shards in the collection. Default: `1` for standalone, otherwise equal to number of nodes. Minimum: `1`
+</ParamField>
+
+<ParamField body="sharding_method" type="string">
+  Sharding method: `Auto` or `Custom`. Default: `Auto`
+</ParamField>
+
+<ParamField body="replication_factor" type="integer">
+  Number of shard replicas. Default: `1`. Minimum: `1`
+</ParamField>
+
+<ParamField body="write_consistency_factor" type="integer">
+  Defines how many replicas should apply the operation for us to consider it successful. Default: `1`. Minimum: `1`
+</ParamField>
+
+<ParamField body="on_disk_payload" type="boolean">
+  If `true`, point payloads will not be stored in memory and will be read from disk. Saves RAM at the cost of slightly increased response time. Default: `true`
+</ParamField>
+
+<ParamField body="hnsw_config" type="object">
+  Custom HNSW index parameters
+</ParamField>
+
+<ParamField body="wal_config" type="object">
+  Write-ahead log configuration
+</ParamField>
+
+<ParamField body="optimizers_config" type="object">
+  Optimizers configuration
+  
+  <ParamField body="deleted_threshold" type="number">
+    Threshold for triggering optimization. Default: `0.2`
+  </ParamField>
+  
+  <ParamField body="vacuum_min_vector_number" type="integer">
+    Minimum number of vectors in segment. Default: `1000`
+  </ParamField>
+  
+  <ParamField body="default_segment_number" type="integer">
+    Default number of segments. Default: `0`
+  </ParamField>
+  
+  <ParamField body="indexing_threshold" type="integer">
+    Threshold for indexing. Default: `20000`
+  </ParamField>
+</ParamField>
+
+<ParamField body="quantization_config" type="object">
+  Quantization configuration for the collection
+</ParamField>
+
+<ParamField body="sparse_vectors" type="object">
+  Sparse vector configuration (map of vector name to sparse vector params)
+</ParamField>
+
+<ParamField body="strict_mode_config" type="object">
+  Strict mode configuration
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Arbitrary JSON metadata for the collection. Can store application-specific information like creation time, model info, etc.
+</ParamField>
+
+## Example Request
+
+```bash
+curl -X PUT http://localhost:6333/collections/my-collection \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "shard_number": 2,
+    "replication_factor": 1,
+    "on_disk_payload": true
+  }'
+```
+
+### Named Vectors Example
+
+```bash
+curl -X PUT http://localhost:6333/collections/multi-vector \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "image": {
+        "size": 512,
+        "distance": "Cosine"
+      },
+      "text": {
+        "size": 384,
+        "distance": "Cosine",
+        "on_disk": true
+      }
+    }
+  }'
+```
+
+## Response
+
+<ResponseField name="result" type="boolean">
+  Returns `true` if the collection was created successfully
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "result": true,
+  "status": "ok",
+  "time": 0.031
+}
+```
+
+## Errors
+
+### Collection Already Exists
+
+```json
+{
+  "status": {
+    "error": "Collection `my-collection` already exists"
+  },
+  "time": 0.001
+}
+```
+
+### Invalid Vector Configuration
+
+```json
+{
+  "status": {
+    "error": "Invalid vector size: must be greater than 0"
+  },
+  "time": 0.001
+}
+```
+
+### Timeout Error
+
+```json
+{
+  "status": {
+    "error": "Operation timeout: collection creation took longer than 60 seconds"
+  },
+  "time": 60.0
+}
+```

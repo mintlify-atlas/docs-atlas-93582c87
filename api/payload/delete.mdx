@@ -1,0 +1,156 @@
+---
+title: Delete Payload
+openapi: POST /collections/{collection_name}/points/payload/delete
+---
+
+Delete specific payload fields from points. This operation removes only the specified keys while preserving other payload fields.
+
+## Use Cases
+
+- Remove outdated or unnecessary metadata fields
+- Clean up payload after processing
+- Delete sensitive information from points
+- Remove temporary fields used during data processing
+
+## Request Body
+
+<ParamField body="keys" type="array" required>
+  List of payload field names to delete. Supports nested keys using JSON path notation (e.g., `metadata.location`).
+  
+  ```json
+  ["price", "category", "metadata.temp"]
+  ```
+</ParamField>
+
+<ParamField body="points" type="array">
+  List of point IDs from which to delete payload fields. Either `points` or `filter` must be provided.
+  
+  ```json
+  [1, 2, 3, 42]
+  ```
+</ParamField>
+
+<ParamField body="filter" type="object">
+  Filter conditions to select points. The specified keys will be deleted from all points matching the filter. Either `points` or `filter` must be provided.
+  
+  ```json
+  {
+    "must": [
+      {
+        "key": "status",
+        "match": {
+          "value": "completed"
+        }
+      }
+    ]
+  }
+  ```
+</ParamField>
+
+<ParamField body="shard_key" type="string | array">
+  Optional shard key to target specific shards in a distributed setup.
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="wait" type="boolean" default="true">
+  If `true`, wait for the operation to complete before returning. If `false`, the operation runs in the background.
+</ParamField>
+
+<ParamField query="ordering" type="string">
+  Write ordering guarantees for the operation. Options: `weak`, `medium`, `strong`.
+</ParamField>
+
+<ParamField query="timeout" type="integer">
+  Operation timeout in seconds.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  Update operation result
+  
+  <ResponseField name="operation_id" type="integer">
+    Sequential number of the operation
+  </ResponseField>
+  
+  <ResponseField name="status" type="string">
+    Operation status: `completed` or `acknowledged`
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Delete Fields from Specific Points
+
+```json
+{
+  "keys": ["price", "discount"],
+  "points": [1, 2, 3]
+}
+```
+
+If point 1 had payload `{"city": "London", "price": 100, "discount": 10}`, after this operation it will have `{"city": "London"}`.
+
+### Delete Fields by Filter
+
+```json
+{
+  "keys": ["temporary_flag"],
+  "filter": {
+    "must": [
+      {
+        "key": "processed",
+        "match": {
+          "value": true
+        }
+      }
+    ]
+  }
+}
+```
+
+Deletes the `temporary_flag` field from all points where `processed` is `true`.
+
+### Delete Nested Fields
+
+```json
+{
+  "keys": ["metadata.temp", "metadata.cache"],
+  "points": [1, 2]
+}
+```
+
+Deletes nested fields within the `metadata` object using JSON path notation.
+
+### Delete with Shard Key
+
+```json
+{
+  "keys": ["session_id"],
+  "points": [1, 2, 3],
+  "shard_key": "user_123"
+}
+```
+
+## Behavior
+
+- Only the specified keys are removed from the payload
+- Other payload fields remain unchanged
+- If a key doesn't exist on a point, no error is raised
+- Nested keys can be deleted using dot notation (e.g., `parent.child`)
+- To remove **all** payload fields from points, use [Clear Payload](/api/payload/clear) instead
+
+## Related Operations
+
+- [Clear Payload](/api/payload/clear) - Remove all payload fields from points
+- [Set Payload](/api/payload/set) - Add or update payload fields
+- [Overwrite Payload](/api/payload/overwrite) - Replace entire payload

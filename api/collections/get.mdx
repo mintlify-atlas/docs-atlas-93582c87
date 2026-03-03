@@ -1,0 +1,237 @@
+---
+title: Get Collection Info
+openapi: GET /collections/{name}
+---
+
+Retrieve detailed information about a specific collection.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection to retrieve
+</ParamField>
+
+## Example Request
+
+```bash
+curl -X GET http://localhost:6333/collections/my-collection
+```
+
+## Response
+
+<ResponseField name="result" type="object">
+  <ResponseField name="status" type="string">
+    Collection status: `green`, `yellow`, or `red`
+  </ResponseField>
+  
+  <ResponseField name="optimizer_status" type="string">
+    Status of collection optimizers: `ok` or `error`
+  </ResponseField>
+  
+  <ResponseField name="warnings" type="array">
+    List of warnings related to the collection configuration
+  </ResponseField>
+  
+  <ResponseField name="vectors_count" type="integer">
+    Deprecated. Use `indexed_vectors_count` instead
+  </ResponseField>
+  
+  <ResponseField name="indexed_vectors_count" type="integer">
+    Approximate number of indexed vectors in the collection
+  </ResponseField>
+  
+  <ResponseField name="points_count" type="integer">
+    Approximate number of points (vectors + payloads) in the collection
+  </ResponseField>
+  
+  <ResponseField name="segments_count" type="integer">
+    Number of segments in the collection
+  </ResponseField>
+  
+  <ResponseField name="config" type="object">
+    Collection configuration
+    
+    <ResponseField name="params" type="object">
+      Collection parameters
+      
+      <ResponseField name="vectors" type="object">
+        Vector configuration (single or named)
+      </ResponseField>
+      
+      <ResponseField name="shard_number" type="integer">
+        Number of shards
+      </ResponseField>
+      
+      <ResponseField name="replication_factor" type="integer">
+        Number of replicas per shard
+      </ResponseField>
+      
+      <ResponseField name="write_consistency_factor" type="integer">
+        Write consistency factor
+      </ResponseField>
+      
+      <ResponseField name="on_disk_payload" type="boolean">
+        Whether payloads are stored on disk
+      </ResponseField>
+    </ResponseField>
+    
+    <ResponseField name="hnsw_config" type="object">
+      HNSW index configuration
+    </ResponseField>
+    
+    <ResponseField name="optimizer_config" type="object">
+      Optimizers configuration
+    </ResponseField>
+    
+    <ResponseField name="wal_config" type="object">
+      Write-ahead log configuration
+    </ResponseField>
+    
+    <ResponseField name="quantization_config" type="object" nullable>
+      Quantization configuration, if enabled
+    </ResponseField>
+  </ResponseField>
+  
+  <ResponseField name="payload_schema" type="object">
+    Map of payload field names to their schema information
+  </ResponseField>
+  
+  <ResponseField name="update_queue" type="object">
+    Information about the update queue
+    
+    <ResponseField name="length" type="integer">
+      Number of operations in the update queue
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "result": {
+    "status": "green",
+    "optimizer_status": "ok",
+    "warnings": [],
+    "indexed_vectors_count": 15000,
+    "points_count": 15000,
+    "segments_count": 5,
+    "config": {
+      "params": {
+        "vectors": {
+          "size": 384,
+          "distance": "Cosine"
+        },
+        "shard_number": 2,
+        "sharding_method": "auto",
+        "replication_factor": 1,
+        "write_consistency_factor": 1,
+        "on_disk_payload": true
+      },
+      "hnsw_config": {
+        "m": 16,
+        "ef_construct": 100,
+        "full_scan_threshold": 10000
+      },
+      "optimizer_config": {
+        "deleted_threshold": 0.2,
+        "vacuum_min_vector_number": 1000,
+        "default_segment_number": 0,
+        "max_segment_size": null,
+        "memmap_threshold": null,
+        "indexing_threshold": 20000,
+        "flush_interval_sec": 5,
+        "max_optimization_threads": null
+      },
+      "wal_config": {
+        "wal_capacity_mb": 32,
+        "wal_segments_ahead": 0
+      },
+      "quantization_config": null
+    },
+    "payload_schema": {
+      "city": {
+        "data_type": "keyword"
+      },
+      "price": {
+        "data_type": "float"
+      }
+    },
+    "update_queue": {
+      "length": 0
+    }
+  },
+  "status": "ok",
+  "time": 0.002
+}
+```
+
+### Named Vectors Response Example
+
+```json
+{
+  "result": {
+    "status": "green",
+    "optimizer_status": "ok",
+    "warnings": [],
+    "indexed_vectors_count": 10000,
+    "points_count": 5000,
+    "segments_count": 3,
+    "config": {
+      "params": {
+        "vectors": {
+          "image": {
+            "size": 512,
+            "distance": "Cosine"
+          },
+          "text": {
+            "size": 384,
+            "distance": "Cosine",
+            "on_disk": true
+          }
+        },
+        "shard_number": 1,
+        "replication_factor": 1,
+        "write_consistency_factor": 1,
+        "on_disk_payload": false
+      },
+      "hnsw_config": {
+        "m": 16,
+        "ef_construct": 100,
+        "full_scan_threshold": 10000
+      },
+      "optimizer_config": {
+        "deleted_threshold": 0.2,
+        "vacuum_min_vector_number": 1000,
+        "default_segment_number": 0,
+        "indexing_threshold": 20000,
+        "flush_interval_sec": 5
+      },
+      "wal_config": {
+        "wal_capacity_mb": 32,
+        "wal_segments_ahead": 0
+      },
+      "quantization_config": null
+    },
+    "payload_schema": {},
+    "update_queue": {
+      "length": 0
+    }
+  },
+  "status": "ok",
+  "time": 0.003
+}
+```
+
+## Errors
+
+### Collection Not Found
+
+```json
+{
+  "status": {
+    "error": "Collection `my-collection` not found"
+  },
+  "time": 0.001
+}
+```

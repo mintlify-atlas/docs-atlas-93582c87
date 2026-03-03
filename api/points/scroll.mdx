@@ -1,0 +1,253 @@
+---
+title: Scroll Points
+api: POST /collections/{name}/points/scroll
+---
+
+Iterate over all points in a collection with optional filtering. Returns points in batches for efficient pagination.
+
+## Path Parameters
+
+<ParamField path="name" type="string" required>
+  Name of the collection to scroll through
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="consistency" type="string">
+  Read consistency level
+</ParamField>
+
+## Request Body
+
+<ParamField body="limit" type="integer" default="10">
+  Maximum number of points to return per page. Cannot be 0.
+</ParamField>
+
+<ParamField body="offset" type="integer | string">
+  Point ID to start from. Use the `next_page_offset` from the previous response for pagination.
+</ParamField>
+
+<ParamField body="filter" type="object">
+  Filter conditions to select specific points
+  
+  <Expandable title="Filter Examples">
+    ```json
+    {
+      "must": [
+        {"key": "city", "match": {"value": "Berlin"}}
+      ]
+    }
+    ```
+  </Expandable>
+</ParamField>
+
+<ParamField body="with_payload" type="boolean | array | object" default="true">
+  Select which payload fields to return:
+  - `true` - return all payload fields
+  - `false` - don't return payload
+  - `["field1", "field2"]` - return specific fields
+  - `{"include": ["field1"]}` or `{"exclude": ["field2"]}`
+</ParamField>
+
+<ParamField body="with_vector" type="boolean | array" default="false">
+  Whether to return vector data:
+  - `true` - return all vectors
+  - `false` - don't return vectors
+  - `["vector_name"]` - return specific named vectors
+</ParamField>
+
+<ParamField body="order_by" type="string | object">
+  Order results by a payload field:
+  - String: `"price"` (ascending by default)
+  - Object: `{"key": "price", "direction": "desc"}`
+  
+  Note: When using `order_by`, the `offset` parameter is not supported.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="object">
+  <Expandable title="Scroll Result">
+    <ResponseField name="points" type="array">
+      Array of point records
+      
+      <Expandable title="Point Record">
+        <ResponseField name="id" type="integer | string">
+          Point ID
+        </ResponseField>
+        
+        <ResponseField name="payload" type="object">
+          Payload data
+        </ResponseField>
+        
+        <ResponseField name="vector" type="array | object">
+          Vector data (if requested)
+        </ResponseField>
+        
+        <ResponseField name="order_value" type="any">
+          Value used for ordering (if `order_by` was specified)
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="next_page_offset" type="integer | string">
+      Offset to use for the next page. `null` if this is the last page.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok` or `error`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Basic Scroll
+
+```json
+{
+  "limit": 10,
+  "with_payload": true,
+  "with_vector": false
+}
+```
+
+### Scroll with Filter
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "city",
+        "match": {
+          "value": "Berlin"
+        }
+      }
+    ]
+  },
+  "limit": 20,
+  "with_payload": true
+}
+```
+
+### Scroll with Pagination
+
+First request:
+```json
+{
+  "limit": 10,
+  "with_payload": ["name", "price"]
+}
+```
+
+Next page (using `next_page_offset` from previous response):
+```json
+{
+  "offset": 11,
+  "limit": 10,
+  "with_payload": ["name", "price"]
+}
+```
+
+### Scroll with Order By
+
+```json
+{
+  "order_by": {
+    "key": "price",
+    "direction": "asc"
+  },
+  "limit": 50,
+  "with_payload": true
+}
+```
+
+### Scroll with Range Filter
+
+```json
+{
+  "filter": {
+    "must": [
+      {
+        "key": "price",
+        "range": {
+          "gte": 10.0,
+          "lt": 100.0
+        }
+      }
+    ]
+  },
+  "limit": 100,
+  "with_payload": true,
+  "with_vector": false
+}
+```
+
+### Scroll Specific Payload Fields
+
+```json
+{
+  "limit": 20,
+  "with_payload": {
+    "include": ["name", "price", "category"]
+  },
+  "with_vector": ["image-embedding"]
+}
+```
+
+### Response Example
+
+```json
+{
+  "result": {
+    "points": [
+      {
+        "id": 1,
+        "payload": {
+          "city": "Berlin",
+          "price": 15.99,
+          "name": "Product A"
+        }
+      },
+      {
+        "id": 2,
+        "payload": {
+          "city": "Berlin",
+          "price": 12.49,
+          "name": "Product B"
+        }
+      }
+    ],
+    "next_page_offset": 3
+  },
+  "status": "ok",
+  "time": 0.002
+}
+```
+
+### Last Page Response
+
+```json
+{
+  "result": {
+    "points": [
+      {
+        "id": 99,
+        "payload": {
+          "city": "Berlin",
+          "price": 9.99,
+          "name": "Last Product"
+        }
+      }
+    ],
+    "next_page_offset": null
+  },
+  "status": "ok",
+  "time": 0.001
+}
+```

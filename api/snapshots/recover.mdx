@@ -1,0 +1,321 @@
+---
+title: Recover from Snapshot
+openapi: PUT /collections/{collection_name}/snapshots/recover
+---
+
+Restore a collection from a snapshot. This operation can recover from local snapshot files, remote URLs, or cloud storage locations.
+
+## Use Cases
+
+- Restore collection after data corruption
+- Migrate collections between Qdrant instances
+- Create new collections from backups
+- Recover from accidental data deletion
+- Clone production data to staging/development
+- Disaster recovery
+
+## Path Parameters
+
+<ParamField path="collection_name" type="string" required>
+  Name of the collection to recover. If the collection doesn't exist, it will be created. If it exists, data will be overwritten based on the `priority` setting.
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="wait" type="boolean" default="true">
+  If `true`, wait for the recovery to complete before returning. If `false`, the operation runs in the background.
+</ParamField>
+
+## Request Body
+
+<ParamField body="location" type="string" required>
+  Location of the snapshot to recover from. Supports multiple formats:
+  
+  - **Local file**: `file:///qdrant/snapshots/my-collection-snapshot.snapshot`
+  - **HTTP/HTTPS URL**: `https://example.com/backups/snapshot.snapshot`
+  - **S3**: `s3://bucket-name/path/to/snapshot.snapshot`
+  - **Azure Blob**: `az://container/path/to/snapshot.snapshot`
+  - **Google Cloud Storage**: `gs://bucket/path/to/snapshot.snapshot`
+</ParamField>
+
+<ParamField body="priority" type="string" default="snapshot">
+  Defines the source of truth when there are conflicts. Options:
+  
+  - `snapshot`: Prefer snapshot data (overwrites existing data)
+  - `replica`: Prefer existing data (snapshot fills in missing data)
+  - `no_sync`: Restore without synchronization (fastest, no conflict resolution)
+</ParamField>
+
+<ParamField body="checksum" type="string">
+  Optional SHA-256 checksum to verify snapshot integrity before recovery. Highly recommended for production use.
+  
+  ```
+  a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+  ```
+</ParamField>
+
+<ParamField body="api_key" type="string">
+  Optional API key for fetching snapshots from protected URLs or cloud storage.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="boolean">
+  `true` if recovery was successful
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok` or `accepted` (if `wait=false`)
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### Recover from Local File
+
+```json
+{
+  "location": "file:///qdrant/snapshots/my-collection/my-collection-3766212330831337-2024-07-22-08-31-55.snapshot"
+}
+```
+
+### Recover from HTTP URL
+
+```json
+{
+  "location": "https://backups.example.com/my-collection-snapshot.snapshot",
+  "checksum": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+}
+```
+
+### Recover from S3
+
+```json
+{
+  "location": "s3://my-backups/qdrant-snapshots/my-collection-2024-07-22.snapshot",
+  "priority": "snapshot",
+  "checksum": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+}
+```
+
+### Recover from Azure Blob Storage
+
+```json
+{
+  "location": "az://backups/qdrant/my-collection.snapshot",
+  "api_key": "your-azure-sas-token"
+}
+```
+
+### Recover from Google Cloud Storage
+
+```json
+{
+  "location": "gs://my-bucket/snapshots/my-collection.snapshot"
+}
+```
+
+### Using cURL
+
+```bash
+curl -X PUT \
+  'http://localhost:6333/collections/my_collection/snapshots/recover' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "location": "file:///qdrant/snapshots/my-collection/snapshot.snapshot",
+    "priority": "snapshot"
+  }'
+```
+
+### Using Python Client
+
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient("http://localhost:6333")
+
+client.recover_snapshot(
+    collection_name="my_collection",
+    location="file:///qdrant/snapshots/my-collection/snapshot.snapshot"
+)
+
+print("Collection recovered successfully")
+```
+
+### Using TypeScript Client
+
+```typescript
+import { QdrantClient } from "@qdrant/js-client-rest";
+
+const client = new QdrantClient({ url: "http://localhost:6333" });
+
+await client.recoverSnapshot("my_collection", {
+  location: "file:///qdrant/snapshots/my-collection/snapshot.snapshot",
+  priority: "snapshot",
+});
+
+console.log("Collection recovered successfully");
+```
+
+## Priority Options Explained
+
+### `snapshot` (Default)
+
+**Use when**: You want to restore the exact state from the snapshot
+
+- Snapshot data **overwrites** existing data
+- Existing points not in snapshot are removed
+- Best for disaster recovery
+
+```json
+{
+  "location": "file:///path/to/snapshot.snapshot",
+  "priority": "snapshot"
+}
+```
+
+### `replica`
+
+**Use when**: You want to merge snapshot data with existing data
+
+- Existing data is **preserved**
+- Snapshot fills in missing points
+- Conflicts resolved in favor of existing data
+- Best for incremental recovery
+
+```json
+{
+  "location": "file:///path/to/snapshot.snapshot",
+  "priority": "replica"
+}
+```
+
+### `no_sync`
+
+**Use when**: You need fastest recovery without synchronization
+
+- No conflict resolution
+- No synchronization with other replicas
+- Fastest recovery option
+- Best for creating new collections
+
+```json
+{
+  "location": "file:///path/to/snapshot.snapshot",
+  "priority": "no_sync"
+}
+```
+
+## Cloud Storage Configuration
+
+### AWS S3
+
+Configure AWS credentials via environment variables:
+
+```bash
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_REGION="us-east-1"
+```
+
+Or use IAM roles for EC2/ECS instances.
+
+### Azure Blob Storage
+
+Provide SAS token in `api_key` field:
+
+```json
+{
+  "location": "az://container/path/snapshot.snapshot",
+  "api_key": "?sv=2020-08-04&ss=b&srt=sco&sp=rwdlacx&se=..."
+}
+```
+
+### Google Cloud Storage
+
+Configure credentials:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+```
+
+## Checksum Verification
+
+Always use checksums in production:
+
+```python
+# Get checksum from snapshot list
+snapshots = client.list_snapshots("my_collection")
+latest = snapshots[0]
+
+# Use checksum in recovery
+client.recover_snapshot(
+    collection_name="my_collection",
+    location=f"file:///qdrant/snapshots/my-collection/{latest.name}",
+    checksum=latest.checksum
+)
+```
+
+## Recovery Behavior
+
+1. **Collection doesn't exist**: New collection is created from snapshot
+2. **Collection exists**: Data is overwritten based on `priority` setting
+3. **Validation**: Checksum is verified if provided
+4. **Sharding**: Snapshot's shard configuration is preserved
+5. **Indexes**: All indexes are restored
+6. **Configuration**: Collection settings are restored
+
+## Performance Considerations
+
+| Factor | Impact |
+|--------|--------|
+| Snapshot size | Larger snapshots take longer to restore |
+| Network speed | Remote snapshots limited by download speed |
+| Priority setting | `no_sync` is fastest, `replica` is slowest |
+| Disk speed | SSD significantly faster than HDD |
+| Compression | Compressed snapshots faster to transfer, slower to decompress |
+
+### Estimated Recovery Times
+
+| Snapshot Size | Local Disk | S3 (good network) |
+|--------------|------------|-------------------|
+| 100 MB | 1-5 seconds | 5-15 seconds |
+| 1 GB | 10-30 seconds | 30-90 seconds |
+| 10 GB | 1-3 minutes | 5-15 minutes |
+| 100 GB | 10-30 minutes | 30-90 minutes |
+
+## Error Handling
+
+```python
+try:
+    client.recover_snapshot(
+        collection_name="my_collection",
+        location="file:///path/to/snapshot.snapshot",
+        checksum="abc123..."
+    )
+except Exception as e:
+    if "checksum mismatch" in str(e):
+        print("Snapshot is corrupted or modified")
+    elif "not found" in str(e):
+        print("Snapshot file not found")
+    else:
+        print(f"Recovery failed: {e}")
+```
+
+## Best Practices
+
+1. **Always use checksums** in production for data integrity
+2. **Test recovery** in staging before using in production
+3. **Monitor disk space** - recovery needs temporary space
+4. **Use `wait=false`** for large snapshots to avoid timeouts
+5. **Backup before recovery** if overwriting existing collections
+6. **Verify after recovery** - check point count and sample data
+
+## Related Operations
+
+- [Create Snapshot](/api/snapshots/create) - Create a new snapshot
+- [List Snapshots](/api/snapshots/list) - View available snapshots
+- [Delete Snapshot](/api/snapshots/delete) - Remove a snapshot

@@ -1,0 +1,338 @@
+---
+title: Telemetry Data
+api: GET /telemetry
+---
+
+Returns comprehensive telemetry data about Qdrant's internal state, performance, and configuration in JSON format.
+
+## Description
+
+The telemetry endpoint provides detailed insights into Qdrant's runtime state, including application info, collection statistics, cluster status, request metrics, and hardware utilization. This data can be used for monitoring, debugging, and performance analysis.
+
+<Info>
+  Telemetry data powers the `/metrics` endpoint. Use `/metrics` for Prometheus integration and `/telemetry` for programmatic access to detailed statistics.
+</Info>
+
+## Query Parameters
+
+<ParamField query="anonymize" type="boolean" default="false">
+  Anonymize sensitive data like collection names, peer IDs, and URIs
+</ParamField>
+
+<ParamField query="details_level" type="integer" default="0">
+  Level of detail in the response:
+  - `0` - Basic info (app, cluster status, collection count)
+  - `1` - Add collection names and basic stats
+  - `2` - Add shard-level information
+  - `3` - Add configuration details
+  - `4` - Full details including histograms
+</ParamField>
+
+<ParamField query="timeout" type="integer" default="60">
+  Timeout in seconds for collecting telemetry (minimum: 1)
+</ParamField>
+
+## Response Structure
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "app": {
+    "name": "qdrant",
+    "version": "1.8.0",
+    "features": [
+      {
+        "recovery_mode": false
+      }
+    ]
+  },
+  "collections": {
+    "number_of_collections": 3,
+    "collections": [...]
+  },
+  "cluster": {
+    "enabled": true,
+    "status": {...}
+  },
+  "requests": {...},
+  "memory": {...},
+  "hardware": {...}
+}
+```
+
+## Response Fields
+
+### Application Info
+
+<ParamField path="id" type="string">
+  Unique UUID identifying this Qdrant process instance
+</ParamField>
+
+<ParamField path="app" type="object">
+  Application build and feature information
+  
+  <Expandable title="App Fields">
+    <ParamField path="name" type="string">
+      Application name ("qdrant")
+    </ParamField>
+    
+    <ParamField path="version" type="string">
+      Qdrant version (e.g., "1.8.0")
+    </ParamField>
+    
+    <ParamField path="features" type="array">
+      Enabled features like `recovery_mode`, `web_ui`, etc.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Collections
+
+<ParamField path="collections" type="object">
+  Collection statistics and telemetry
+  
+  <Expandable title="Collections Fields">
+    <ParamField path="number_of_collections" type="integer">
+      Total number of collections
+    </ParamField>
+    
+    <ParamField path="max_collections" type="integer">
+      Maximum allowed collections (if configured)
+    </ParamField>
+    
+    <ParamField path="collections" type="array">
+      Per-collection telemetry (included at `details_level >= 1`)
+      
+      Each collection includes:
+      - `id` - Collection name
+      - `shards` - Shard-level statistics
+      - `config` - Collection configuration
+      - `transfers` - Active shard transfers
+    </ParamField>
+    
+    <ParamField path="snapshots" type="array">
+      Snapshot telemetry per collection
+      
+      Fields:
+      - `id` - Collection name
+      - `running_snapshots` - Active snapshot creations
+      - `running_snapshot_recovery` - Active recoveries
+      - `total_snapshot_creations` - Lifetime snapshot count
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Cluster Status
+
+<ParamField path="cluster" type="object">
+  Cluster configuration and status
+  
+  <Expandable title="Cluster Fields">
+    <ParamField path="enabled" type="boolean">
+      Whether clustering is enabled
+    </ParamField>
+    
+    <ParamField path="status" type="object">
+      Current cluster status (when enabled)
+      
+      Fields:
+      - `peer_id` - This peer's ID
+      - `number_of_peers` - Total peers in cluster
+      - `term` - Current Raft term
+      - `commit` - Last committed index
+      - `pending_operations` - Unapplied operations
+      - `is_voter` - Whether this peer can vote
+      - `consensus_thread_status` - Thread health
+    </ParamField>
+    
+    <ParamField path="config" type="object">
+      Cluster configuration (at higher detail levels)
+    </ParamField>
+    
+    <ParamField path="peers" type="object">
+      Map of peer IDs to peer information
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Request Statistics
+
+<ParamField path="requests" type="object">
+  HTTP and gRPC request telemetry
+  
+  <Expandable title="Request Fields">
+    <ParamField path="rest" type="object">
+      REST API request statistics
+      
+      Structure:
+      ```json
+      {
+        "responses": {
+          "POST /collections/{name}/points/search": {
+            "200": {
+              "count": 1523,
+              "avg_duration_micros": 1250.5,
+              "min_duration_micros": 234.0,
+              "max_duration_micros": 5432.1
+            }
+          }
+        }
+      }
+      ```
+    </ParamField>
+    
+    <ParamField path="grpc" type="object">
+      gRPC request statistics with same structure as REST
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Memory Usage
+
+<ParamField path="memory" type="object">
+  Memory allocator statistics (included at `details_level > 0`)
+  
+  <Expandable title="Memory Fields">
+    <ParamField path="active_bytes" type="integer">
+      Bytes in active pages
+    </ParamField>
+    
+    <ParamField path="allocated_bytes" type="integer">
+      Total allocated bytes
+    </ParamField>
+    
+    <ParamField path="metadata_bytes" type="integer">
+      Allocator metadata overhead
+    </ParamField>
+    
+    <ParamField path="resident_bytes" type="integer">
+      Resident memory size
+    </ParamField>
+    
+    <ParamField path="retained_bytes" type="integer">
+      Virtual memory size
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Hardware Metrics
+
+<ParamField path="hardware" type="object">
+  I/O and CPU usage per collection (included at `details_level > 0`)
+  
+  <Expandable title="Hardware Fields">
+    ```json
+    {
+      "collection_data": {
+        "my_collection": {
+          "cpu": 1234567,
+          "payload_io_read": 98765432,
+          "payload_io_write": 12345678,
+          "vector_io_read": 87654321,
+          "vector_io_write": 23456789
+        }
+      }
+    }
+    ```
+    
+    All values are cumulative counters in appropriate units.
+  </Expandable>
+</ParamField>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Performance Monitoring" icon="chart-line">
+    Track request latencies, throughput, and resource usage over time
+  </Card>
+  
+  <Card title="Capacity Planning" icon="gauge-high">
+    Analyze collection sizes, memory usage, and I/O patterns
+  </Card>
+  
+  <Card title="Debugging" icon="bug">
+    Investigate issues with detailed shard and replica state
+  </Card>
+  
+  <Card title="Alerting" icon="bell">
+    Build custom alerts based on cluster health and performance metrics
+  </Card>
+</CardGroup>
+
+## Example Requests
+
+<CodeGroup>
+```bash Basic Telemetry
+curl http://localhost:6333/telemetry
+```
+
+```bash Detailed Telemetry
+curl "http://localhost:6333/telemetry?details_level=4"
+```
+
+```bash Anonymized
+curl "http://localhost:6333/telemetry?anonymize=true&details_level=2"
+```
+
+```python Python
+from qdrant_client import QdrantClient
+
+client = QdrantClient(url="http://localhost:6333")
+
+# Get basic telemetry
+telemetry = client.get_telemetry()
+print(f"Version: {telemetry['app']['version']}")
+print(f"Collections: {telemetry['collections']['number_of_collections']}")
+
+# Get detailed telemetry
+detailed = client.get_telemetry(details_level=4)
+for collection in detailed['collections']['collections']:
+    print(f"Collection: {collection['id']}")
+    print(f"  Shards: {len(collection['shards'])}")
+```
+
+```typescript TypeScript
+import { QdrantClient } from "@qdrant/js-client-rest";
+
+const client = new QdrantClient({ url: "http://localhost:6333" });
+
+const telemetry = await client.getTelemetry({
+  anonymize: false,
+  detailsLevel: 2
+});
+
+console.log(`Qdrant v${telemetry.app.version}`);
+console.log(`Collections: ${telemetry.collections.number_of_collections}`);
+```
+</CodeGroup>
+
+## Privacy Considerations
+
+When `anonymize=true`:
+- Collection names are hashed
+- Peer URIs are anonymized
+- UUIDs are regenerated
+- Vector names are hashed
+
+This allows sharing telemetry for support/debugging without exposing sensitive information.
+
+## Performance Impact
+
+Telemetry collection:
+- **Level 0-1**: Minimal overhead (< 10ms)
+- **Level 2-3**: Moderate overhead (~50-100ms for large clusters)
+- **Level 4**: Higher overhead with histogram calculations (~100-500ms)
+
+Default timeout is 60 seconds. Use lower `details_level` for frequent polling.
+
+## Implementation Details
+
+- Collector: `src/common/telemetry.rs` - TelemetryCollector
+- Endpoint: `src/actix/api/service_api.rs:46` - HTTP handler
+- Storage: `lib/storage/src/content_manager/toc/telemetry.rs` - Collection telemetry
+
+## Related Endpoints
+
+- [Metrics](/api/service/metrics) - Prometheus-formatted metrics derived from telemetry
+- [Cluster Status](/api/cluster/status) - Quick cluster health check
+- [Health Check](/api/service/health) - Service availability endpoints

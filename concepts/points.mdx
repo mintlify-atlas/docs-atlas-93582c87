@@ -1,0 +1,556 @@
+---
+title: Points
+description: Points structure, payloads, and management in Qdrant
+---
+
+Points are the core data objects in Qdrant. Each point consists of a unique ID, one or more vectors, and an optional payload (metadata).
+
+## Point Structure
+
+```rust
+pub struct ScoredPoint {
+    pub id: PointIdType,           // Point identifier
+    pub version: SeqNumberType,    // Version number
+    pub score: ScoreType,          // Similarity score
+    pub payload: Option<Payload>,  // JSON metadata
+    pub vector: Option<VectorStructInternal>,
+    pub shard_key: Option<ShardKey>,
+    pub order_value: Option<OrderValue>,
+}
+```
+
+**Source:** `lib/segment/src/types.rs:373-388`
+
+<Tabs>
+  <Tab title="Point ID">
+    Points can be identified by:
+
+    ```rust
+    pub enum ExtendedPointId {
+        NumId(u64),      // Numeric ID: 42
+        Uuid(Uuid),      // UUID: "550e8400-e29b-41d4-a716-446655440000"
+    }
+    ```
+
+    **Source:** `lib/segment/src/types.rs:162-169`
+
+    ```json
+    {
+      "id": 42
+    }
+    ```
+    or
+    ```json
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000"
+    }
+    ```
+  </Tab>
+
+  <Tab title="Vectors">
+    Single or named vectors:
+
+    ```json Single Vector
+    {
+      "id": 1,
+      "vector": [0.1, 0.2, 0.3, 0.4]
+    }
+    ```
+
+    ```json Named Vectors
+    {
+      "id": 1,
+      "vector": {
+        "text": [0.1, 0.2, 0.3],
+        "image": [0.4, 0.5, 0.6]
+      }
+    }
+    ```
+
+    **Source:** `lib/api/src/rest/schema.rs:88-112`
+  </Tab>
+
+  <Tab title="Payload">
+    JSON metadata associated with point:
+
+    ```json
+    {
+      "id": 1,
+      "payload": {
+        "city": "London",
+        "price": 125.50,
+        "tags": ["historic", "riverside"],
+        "location": {
+          "lat": 51.5074,
+          "lon": -0.1278
+        }
+      }
+    }
+    ```
+
+    **Source:** `lib/segment/src/types.rs:1888-1890`
+  </Tab>
+</Tabs>
+
+## Vector Types in Points
+
+### Dense Vectors
+
+```json
+{
+  "id": 1,
+  "vector": [0.875, 0.140625, 0.8976]
+}
+```
+
+**Source:** `lib/api/src/rest/schema.rs:66-68`
+
+### Sparse Vectors
+
+```json
+{
+  "id": 2,
+  "vector": {
+    "indices": [0, 5, 10, 127],
+    "values": [0.1, 0.5, 0.8, 0.2]
+  }
+}
+```
+
+Sparse vectors only store non-zero values for efficiency.
+
+### Multi-Dense Vectors
+
+```json
+{
+  "id": 3,
+  "vector": [
+    [0.875, 0.140625, 0.1102],
+    [0.758, 0.28126, 0.96871],
+    [0.621, 0.421878, 0.9375]
+  ]
+}
+```
+
+**Source:** `lib/api/src/rest/schema.rs:70-76`
+
+Used for late interaction models (e.g., ColBERT) where multiple vectors represent one document.
+
+## Payload Structure
+
+```rust
+pub struct Payload(pub Map<String, Value>);
+```
+
+**Source:** `lib/segment/src/types.rs:1888-1890`
+
+Payload is a JSON object supporting various data types:
+
+<Tabs>
+  <Tab title="Supported Types">
+    - **String/Keyword**: `"city": "London"`
+    - **Integer**: `"count": 42`
+    - **Float**: `"price": 19.99`
+    - **Boolean**: `"active": true`
+    - **Geo Point**: `{"lat": 51.5, "lon": -0.1}`
+    - **Datetime**: `"created_at": "2024-01-15T10:30:00Z"`
+    - **UUID**: `"user_id": "550e8400-e29b-41d4-a716-446655440000"`
+    - **Array**: `"tags": ["a", "b", "c"]`
+    - **Nested Objects**: `{"metadata": {"author": "John"}}`
+  </Tab>
+
+  <Tab title="Geo Points">
+    ```rust
+    pub struct GeoPoint {
+        pub lon: OrderedFloat<f64>,  // -180 to 180
+        pub lat: OrderedFloat<f64>,  // -90 to 90
+    }
+    ```
+
+    **Source:** `lib/segment/src/types.rs:1763-1766`
+
+    ```json
+    {
+      "location": {
+        "lat": 51.5074,
+        "lon": -0.1278
+      }
+    }
+    ```
+
+    Validation ensures lat ∈ [-90, 90] and lon ∈ [-180, 180].
+  </Tab>
+
+  <Tab title="Arrays & Nested">
+    ```json
+    {
+      "tags": ["historic", "museum", "popular"],
+      "metadata": {
+        "author": "John Doe",
+        "ratings": [4.5, 4.8, 5.0],
+        "attributes": {
+          "verified": true,
+          "featured": false
+        }
+      }
+    }
+    ```
+
+    Deeply nested structures are supported.
+  </Tab>
+</Tabs>
+
+## Payload Schema Types
+
+```rust
+pub enum PayloadSchemaType {
+    Keyword,   // String values
+    Integer,   // i64 integers
+    Float,     // f64 floating point
+    Geo,       // Geographic coordinates
+    Text,      // Full-text search
+    Bool,      // Boolean values
+    Datetime,  // RFC3339 timestamps
+    Uuid,      // UUID identifiers
+}
+```
+
+**Source:** Inferred from `lib/segment/src/types.rs:2264-2271`
+
+## Point Operations
+
+### Upsert Points
+
+```json
+{
+  "points": [
+    {
+      "id": 1,
+      "vector": [0.1, 0.2, 0.3],
+      "payload": {"city": "Berlin"}
+    },
+    {
+      "id": 2,
+      "vector": [0.4, 0.5, 0.6],
+      "payload": {"city": "Paris"}
+    }
+  ]
+}
+```
+
+Upsert creates new points or updates existing ones.
+
+### Batch Operations
+
+```rust
+pub struct Batch {
+    pub ids: Vec<PointIdType>,
+    pub vectors: BatchVectorStruct,
+    pub payloads: Option<Vec<Option<Payload>>>,
+}
+```
+
+**Source:** `lib/api/src/rest/schema.rs:397-401`
+
+```json
+{
+  "batch": {
+    "ids": [1, 2, 3],
+    "vectors": [
+      [0.1, 0.2],
+      [0.3, 0.4],
+      [0.5, 0.6]
+    ],
+    "payloads": [
+      {"color": "red"},
+      {"color": "blue"},
+      null
+    ]
+  }
+}
+```
+
+### Update Payload
+
+<Tabs>
+  <Tab title="Set Payload">
+    Set or overwrite specific fields:
+
+    ```json
+    {
+      "points": [1, 2, 3],
+      "payload": {
+        "status": "active",
+        "updated_at": "2024-01-15T10:00:00Z"
+      }
+    }
+    ```
+
+    Merges with existing payload.
+  </Tab>
+
+  <Tab title="Delete Payload">
+    Remove specific fields:
+
+    ```json
+    {
+      "points": [1, 2, 3],
+      "keys": ["temporary_field", "cache"]
+    }
+    ```
+  </Tab>
+
+  <Tab title="Clear Payload">
+    Remove all payload fields:
+
+    ```json
+    {
+      "points": [1, 2, 3]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Point Retrieval
+
+### Get by ID
+
+```json Request
+{
+  "ids": [1, 2, 3],
+  "with_vector": true,
+  "with_payload": true
+}
+```
+
+```json Response
+{
+  "result": [
+    {
+      "id": 1,
+      "version": 5,
+      "vector": [0.1, 0.2, 0.3],
+      "payload": {"city": "Berlin"}
+    }
+  ]
+}
+```
+
+### Scroll Points
+
+Iterate through all points:
+
+```json
+{
+  "limit": 100,
+  "with_vector": false,
+  "with_payload": {"include": ["city", "price"]}
+}
+```
+
+## With Payload Interface
+
+```rust
+pub enum WithPayloadInterface {
+    Bool(bool),                    // true = all, false = none
+    Fields(Vec<JsonPath>),         // Specific fields
+    Selector(PayloadSelector),     // Include/exclude
+}
+```
+
+**Source:** `lib/segment/src/types.rs:3477-3485`
+
+<Tabs>
+  <Tab title="Boolean">
+    ```json
+    {"with_payload": true}   // Return all payload
+    {"with_payload": false}  // No payload
+    ```
+  </Tab>
+
+  <Tab title="Fields">
+    ```json
+    {
+      "with_payload": ["city", "price", "metadata.author"]
+    }
+    ```
+  </Tab>
+
+  <Tab title="Include/Exclude">
+    ```json Include specific fields
+    {
+      "with_payload": {
+        "include": ["city", "country"]
+      }
+    }
+    ```
+
+    ```json Exclude specific fields
+    {
+      "with_payload": {
+        "exclude": ["internal_id", "metadata"]
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## With Vector Interface
+
+```rust
+pub enum WithVector {
+    Bool(bool),                   // true = all, false = none
+    Selector(Vec<VectorNameBuf>), // Specific named vectors
+}
+```
+
+**Source:** `lib/segment/src/types.rs:3503-3509`
+
+```json
+{"with_vector": true}              // All vectors
+{"with_vector": false}             // No vectors
+{"with_vector": ["text", "image"]} // Specific named vectors
+```
+
+## Point Versioning
+
+Each point has a version number:
+
+```rust
+pub type SeqNumberType = u64;
+```
+
+**Source:** `lib/segment/src/types.rs:52`
+
+Versions increment on updates, enabling:
+- Optimistic locking
+- Change tracking
+- Replication ordering
+
+## Record Structure
+
+Retrieved points use the `Record` format:
+
+```rust
+pub struct Record {
+    pub id: PointIdType,
+    pub payload: Option<Payload>,
+    pub vector: Option<VectorStructOutput>,
+    pub shard_key: Option<ShardKey>,
+    pub order_value: Option<OrderValue>,
+}
+```
+
+**Source:** `lib/api/src/rest/schema.rs:470-486`
+
+## Example Point Structures
+
+<CodeGroup>
+  ```json Simple Point
+  {
+    "id": 1,
+    "vector": [0.1, 0.2, 0.3, 0.4],
+    "payload": {
+      "title": "Sample Document",
+      "category": "tech"
+    }
+  }
+  ```
+
+  ```json Multi-Vector Point
+  {
+    "id": 2,
+    "vector": {
+      "text": [0.1, 0.2, 0.3],
+      "image": [0.4, 0.5, 0.6]
+    },
+    "payload": {
+      "title": "Product Listing",
+      "price": 29.99
+    }
+  }
+  ```
+
+  ```json Geo-Tagged Point
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "vector": [0.87, 0.14, 0.90],
+    "payload": {
+      "name": "Coffee Shop",
+      "location": {
+        "lat": 51.5074,
+        "lon": -0.1278
+      },
+      "rating": 4.5,
+      "tags": ["cafe", "wifi", "outdoor"]
+    }
+  }
+  ```
+
+  ```json Rich Metadata Point
+  {
+    "id": 100,
+    "vector": [0.2, 0.5, 0.1],
+    "payload": {
+      "title": "Research Paper",
+      "author": "Dr. Smith",
+      "published": "2024-01-15T00:00:00Z",
+      "citations": 42,
+      "keywords": ["AI", "ML", "NLP"],
+      "metadata": {
+        "journal": "Nature",
+        "peer_reviewed": true,
+        "open_access": false
+      }
+    }
+  }
+  ```
+</CodeGroup>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Point IDs">
+    - Use numeric IDs for sequential data (auto-increment)
+    - Use UUIDs for distributed systems
+    - Keep IDs immutable after creation
+    - Consider UUID v7 for time-ordered IDs
+  </Accordion>
+
+  <Accordion title="Payload Design">
+    - Index frequently filtered fields
+    - Keep payload size reasonable (< 100KB per point)
+    - Use nested structures for related data
+    - Avoid very deep nesting (> 5 levels)
+  </Accordion>
+
+  <Accordion title="Batch Operations">
+    - Batch upserts for better performance (100-1000 points)
+    - Use batch operations for bulk updates
+    - Consider memory limits for large batches
+  </Accordion>
+
+  <Accordion title="Vector Management">
+    - Ensure vector dimensions match collection config
+    - Normalize vectors if using Cosine distance
+    - Use named vectors for multi-modal data
+    - Validate vector data before upload
+  </Accordion>
+</AccordionGroup>
+
+## Related Concepts
+
+<CardGroup cols={2}>
+  <Card title="Vectors" href="/concepts/vectors">
+    Understanding vector types and metrics
+  </Card>
+  <Card title="Collections" href="/concepts/collections">
+    Collection configuration and structure
+  </Card>
+  <Card title="Filtering" href="/concepts/filtering">
+    Payload filtering capabilities
+  </Card>
+  <Card title="Search" href="/concepts/search">
+    Search and retrieval operations
+  </Card>
+</CardGroup>

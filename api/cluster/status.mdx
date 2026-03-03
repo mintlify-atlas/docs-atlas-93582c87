@@ -1,0 +1,159 @@
+---
+title: Get Cluster Status
+api: GET /cluster
+---
+
+Returns the current status and information about the Qdrant cluster.
+
+## Description
+
+This endpoint provides comprehensive information about the cluster state, including peer details, Raft consensus status, and cluster health.
+
+## Response
+
+Returns `ClusterStatus` which can be either:
+
+### Disabled Mode
+
+```json
+{
+  "status": "disabled"
+}
+```
+
+Returned when Qdrant is running in standalone (non-clustered) mode.
+
+### Enabled Mode
+
+```json
+{
+  "status": "enabled",
+  "peer_id": 123456789,
+  "peers": {
+    "123456789": {
+      "uri": "http://node1:6335"
+    },
+    "987654321": {
+      "uri": "http://node2:6335"
+    }
+  },
+  "raft_info": {
+    "term": 5,
+    "commit": 1234,
+    "pending_operations": 0,
+    "leader": 123456789,
+    "role": "Leader",
+    "is_voter": true
+  },
+  "consensus_thread_status": {
+    "consensus_thread_status": "working",
+    "last_update": "2026-03-03T10:30:00Z"
+  },
+  "message_send_failures": {}
+}
+```
+
+## Response Fields
+
+<ParamField path="peer_id" type="integer">
+  The ID of the current peer
+</ParamField>
+
+<ParamField path="peers" type="object">
+  Map of all peers in the cluster with their URIs
+</ParamField>
+
+<ParamField path="raft_info" type="object">
+  Raft consensus information
+  
+  <Expandable title="Raft Info Fields">
+    <ParamField path="term" type="integer">
+      Current Raft term number
+    </ParamField>
+    
+    <ParamField path="commit" type="integer">
+      Index of last committed operation
+    </ParamField>
+    
+    <ParamField path="pending_operations" type="integer">
+      Number of unapplied operations in the queue
+    </ParamField>
+    
+    <ParamField path="leader" type="integer">
+      Peer ID of the current cluster leader (null during election)
+    </ParamField>
+    
+    <ParamField path="role" type="string">
+      Role of this peer: `Follower`, `Candidate`, `Leader`, or `PreCandidate`
+    </ParamField>
+    
+    <ParamField path="is_voter" type="boolean">
+      Whether this peer is a voter (true) or learner (false)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="consensus_thread_status" type="object">
+  Status of the consensus thread
+  
+  <Expandable title="Status Types">
+    - `working`: Consensus thread is running normally
+    - `stopped`: Thread has stopped
+    - `stopped_with_err`: Thread stopped due to an error
+  </Expandable>
+</ParamField>
+
+<ParamField path="message_send_failures" type="object">
+  Map of peer addresses to message send failure information. Empty when all peers are reachable.
+  
+  <Expandable title="Failure Fields">
+    <ParamField path="count" type="integer">
+      Number of consecutive failures
+    </ParamField>
+    
+    <ParamField path="latest_error" type="string">
+      Description of the most recent error
+    </ParamField>
+    
+    <ParamField path="latest_error_timestamp" type="string">
+      ISO 8601 timestamp of the latest failure
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Use Cases
+
+- **Health Monitoring**: Check if the cluster has an established leader
+- **Debugging**: Identify which peers are unreachable or experiencing issues
+- **Cluster State**: Verify consensus status and pending operations
+- **Role Verification**: Confirm the current peer's role in the cluster
+
+## Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:6333/cluster
+```
+
+```python Python
+from qdrant_client import QdrantClient
+
+client = QdrantClient(url="http://localhost:6333")
+status = client.get_cluster_status()
+print(f"Leader: {status.raft_info.leader}")
+print(f"Role: {status.raft_info.role}")
+```
+
+```typescript TypeScript
+import { QdrantClient } from "@qdrant/js-client-rest";
+
+const client = new QdrantClient({ url: "http://localhost:6333" });
+const status = await client.clusterStatus();
+console.log(`Leader: ${status.raft_info.leader}`);
+```
+</CodeGroup>
+
+## Related Endpoints
+
+- [Cluster Recovery](/api/cluster/recovery) - Trigger snapshot recovery
+- [Health Check](/api/service/health) - Basic service health endpoints

@@ -1,0 +1,426 @@
+---
+title: Multi-Tenancy
+description: Implement multi-tenant architectures with data isolation and per-tenant scaling
+---
+
+Multi-tenancy allows you to serve multiple customers (tenants) from a single Qdrant deployment while maintaining data isolation and performance.
+
+## Multi-Tenancy Approaches
+
+Qdrant offers three approaches for implementing multi-tenancy:
+
+### 1. Separate Collections
+
+Create a dedicated collection per tenant:
+
+```http
+PUT /collections/tenant_acme_corp
+```
+
+✅ **Pros:**
+- Complete isolation
+- Independent configuration per tenant
+- Easy to delete tenant data
+
+❌ **Cons:**
+- High overhead with many tenants
+- Collection limit constraints
+- Complex management
+
+**Use when:** < 100 tenants with distinct requirements
+
+### 2. Payload Filtering
+
+Store all tenants in one collection, filter by tenant ID:
+
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "filter": {
+    "must": [
+      {
+        "key": "tenant_id",
+        "match": {
+          "value": "acme_corp"
+        }
+      }
+    ]
+  }
+}
+```
+
+✅ **Pros:**
+- Simple setup
+- Unlimited tenants
+- Efficient resource usage
+
+❌ **Cons:**
+- No data isolation
+- Cannot scale tenants independently
+- Payload index required for performance
+
+**Use when:** > 1000 tenants with similar workloads
+
+### 3. Shard Keys (Recommended)
+
+Use custom sharding with tenant-based shard keys:
+
+```json
+{
+  "vectors": {
+    "size": 768,
+    "distance": "Cosine"
+  },
+  "sharding_method": "custom"
+}
+```
+
+Then create shard keys per tenant:
+
+```http
+PUT /collections/documents/shards
+```
+
+```json
+{
+  "shard_key": "acme_corp",
+  "shards_number": 2,
+  "placement": [[1, 2]]
+}
+```
+
+✅ **Pros:**
+- Physical data isolation
+- Per-tenant scaling
+- Better performance than filtering
+- Easy tenant deletion
+
+❌ **Cons:**
+- Requires custom sharding setup
+- More complex than simple filtering
+
+**Use when:** 100-10,000 tenants needing isolation
+
+## Implementing Shard Key Multi-Tenancy
+
+### Step 1: Create Collection
+
+Create a collection with custom sharding:
+
+```http
+PUT /collections/multi_tenant_docs
+```
+
+```json
+{
+  "vectors": {
+    "size": 768,
+    "distance": "Cosine"
+  },
+  "sharding_method": "custom",
+  "replication_factor": 2
+}
+```
+
+### Step 2: Onboard Tenants
+
+For each new tenant, create a shard key:
+
+```http
+PUT /collections/multi_tenant_docs/shards
+```
+
+```json
+{
+  "shard_key": "tenant_123",
+  "shards_number": 1,
+  "placement": [[1, 2]]  // Replicas on peers 1 and 2
+}
+```
+
+### Step 3: Insert Tenant Data
+
+Always specify the shard key when inserting:
+
+```http
+PUT /collections/multi_tenant_docs/points
+```
+
+```json
+{
+  "points": [
+    {
+      "id": 1,
+      "vector": [0.1, 0.2, 0.3],
+      "payload": {
+        "document_id": "doc_456",
+        "content": "Quarterly report"
+      }
+    }
+  ],
+  "shard_key": "tenant_123"
+}
+```
+
+<Warning>
+Omitting `shard_key` during insert will cause an error with custom sharding.
+</Warning>
+
+### Step 4: Query Tenant Data
+
+Include shard key in search requests:
+
+```http
+POST /collections/multi_tenant_docs/points/search
+```
+
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "limit": 10,
+  "shard_key": "tenant_123"
+}
+```
+
+### Step 5: Offboard Tenants
+
+Delete a tenant by removing their shard key:
+
+```http
+DELETE /collections/multi_tenant_docs/shards/tenant_123
+```
+
+This deletes all data for that tenant efficiently.
+
+## Advanced Multi-Tenancy Patterns
+
+### Tiered Tenants
+
+Allocate resources based on tenant tier:
+
+```javascript
+// Premium tenant: dedicated shards
+fetch('/collections/docs/shards', {
+  method: 'PUT',
+  body: JSON.stringify({
+    shard_key: 'premium_tenant_1',
+    shards_number: 4,  // More shards
+    placement: [[1, 2], [3, 4], [5, 6], [7, 8]]
+  })
+});
+
+// Standard tenant: shared shards
+fetch('/collections/docs/shards', {
+  method: 'PUT',
+  body: JSON.stringify({
+    shard_key: 'standard_tenant_1',
+    shards_number: 1,
+    placement: [[1, 2]]
+  })
+});
+```
+
+### Multi-Region Tenants
+
+Place tenant data in specific regions:
+
+```json
+// EU tenant - data on EU nodes
+{
+  "shard_key": "eu_tenant_1",
+  "placement": [[11, 12], [13, 14]]  // EU peers
+}
+
+// US tenant - data on US nodes
+{
+  "shard_key": "us_tenant_1",
+  "placement": [[21, 22], [23, 24]]  // US peers
+}
+```
+
+### Tenant Groups
+
+Group related tenants on the same shards:
+
+```json
+{
+  "shard_key": ["tenant_a", "tenant_b", "tenant_c"],
+  "shards_number": 1,
+  "placement": [[1, 2]]
+}
+```
+
+Query across tenant group:
+
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "shard_key": ["tenant_a", "tenant_b"]
+}
+```
+
+## Security Considerations
+
+### Access Control
+
+Combine multi-tenancy with RBAC:
+
+```json
+// API key with access to specific tenant
+{
+  "access": [
+    {
+      "collection": "multi_tenant_docs",
+      "access": "rw",
+      "shard_key": "tenant_123"  // Restrict to shard key
+    }
+  ]
+}
+```
+
+<Note>
+RBAC integration with shard keys is available in Qdrant Cloud and Enterprise.
+</Note>
+
+### Tenant Isolation Verification
+
+Verify tenant data is properly isolated:
+
+```http
+GET /collections/multi_tenant_docs/shards
+```
+
+Check that each tenant's shard key exists and has the expected placement.
+
+## Performance Optimization
+
+### Right-Size Tenant Shards
+
+| Tenant Size | Shard Count | Placement Strategy |
+|-------------|-------------|--------------------|
+| Small (< 100K points) | 1 | Single pair of replicas |
+| Medium (100K-1M points) | 2-4 | Multiple replica pairs |
+| Large (> 1M points) | 4-8+ | Distributed across cluster |
+
+### Batch Operations
+
+Batch inserts/updates per tenant for better throughput:
+
+```json
+{
+  "points": [
+    {"id": 1, "vector": [0.1, 0.2]},
+    {"id": 2, "vector": [0.3, 0.4]},
+    // ... up to 1000 points
+  ],
+  "shard_key": "tenant_123"
+}
+```
+
+### Index per Shard Key
+
+Payload indexes are created per shard, enabling tenant-specific optimization:
+
+```http
+PUT /collections/multi_tenant_docs/index
+```
+
+```json
+{
+  "field_name": "status",
+  "field_schema": "keyword",
+  "shard_key": "tenant_123"  // Index only for this tenant
+}
+```
+
+## Monitoring Multi-Tenant Systems
+
+### Per-Tenant Metrics
+
+Track metrics by shard key:
+
+- **Point count** per tenant
+- **Query latency** per tenant
+- **Storage usage** per tenant
+- **Request rate** per tenant
+
+### Shard Distribution
+
+Monitor shard balance:
+
+```http
+GET /collections/multi_tenant_docs/cluster
+```
+
+Ensure:
+- Even distribution across nodes
+- No hotspots on individual peers
+- Healthy replica states
+
+## Migration Strategies
+
+### From Payload Filtering to Shard Keys
+
+1. Create new collection with custom sharding
+2. For each tenant:
+   - Create shard key
+   - Scroll tenant points from old collection
+   - Insert into new collection with shard key
+3. Switch application to new collection
+4. Delete old collection
+
+### From Separate Collections to Shard Keys
+
+1. Create unified collection with custom sharding
+2. For each tenant collection:
+   - Create corresponding shard key
+   - Snapshot tenant collection
+   - Restore into unified collection with shard key
+3. Update application routing
+4. Archive old collections
+
+## Cost Optimization
+
+### Shared Infrastructure
+
+Small tenants share shard resources:
+
+```json
+{
+  "shard_key": "shared_small_tenants",
+  "shards_number": 2,
+  "placement": [[1, 2]]
+}
+```
+
+Use payload filtering within the shared shard key:
+
+```json
+{
+  "vector": [0.1, 0.2, 0.3],
+  "shard_key": "shared_small_tenants",
+  "filter": {
+    "must": [{"key": "tenant_id", "match": {"value": "small_tenant_1"}}]
+  }
+}
+```
+
+### Dynamic Scaling
+
+Grow tenant shards as they scale:
+
+```javascript
+// Tenant grows beyond threshold
+if (tenantPointCount > 500000) {
+  // Trigger resharding to add capacity
+  await addShardForTenant(tenantId);
+}
+```
+
+## Source Code References
+
+Key implementation files:
+
+- `lib/collection/src/collection/sharding_keys.rs:60` - Shard key creation for tenants
+- `lib/collection/src/config.rs:99` - Custom sharding method
+- `lib/api/src/rest/schema.rs:413` - Shard key selector types

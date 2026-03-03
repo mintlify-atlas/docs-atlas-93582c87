@@ -1,0 +1,538 @@
+---
+title: Distributed Cluster Setup
+description: Configure and deploy a distributed Qdrant cluster
+---
+
+Qdrant supports distributed deployment using the Raft consensus protocol for high availability and horizontal scaling.
+
+## Cluster Architecture
+
+A Qdrant cluster consists of:
+
+- **Multiple nodes**: Each node runs a Qdrant instance
+- **Raft consensus**: Ensures consistency across nodes
+- **Shard replication**: Data is distributed and replicated across nodes
+- **P2P communication**: Nodes communicate via internal gRPC (port 6335)
+
+## Cluster Ports
+
+| Port | Purpose | Required |
+|------|---------|----------|
+| 6333 | HTTP REST API | Yes |
+| 6334 | gRPC API | Optional |
+| 6335 | Internal P2P cluster communication | Yes (cluster mode) |
+
+## Configuration
+
+### Enable Clustering
+
+In `config.yaml`:
+
+```yaml
+cluster:
+  enabled: true
+  
+  # Configuration of inter-cluster communication
+  p2p:
+    port: 6335
+    enable_tls: false
+  
+  # Consensus configuration
+  consensus:
+    tick_period_ms: 100
+    bootstrap_timeout_sec: 15
+    compact_wal_entries: 128
+```
+
+### Environment Variables
+
+```bash
+QDRANT__CLUSTER__ENABLED=true
+QDRANT__CLUSTER__P2P__PORT=6335
+QDRANT__SERVICE__GRPC_PORT=6334
+```
+
+## Bootstrapping a Cluster
+
+### First Node (Seed Node)
+
+The first node initializes the cluster:
+
+```bash
+./qdrant --uri 'http://node1.example.com:6335'
+```
+
+Or with Docker:
+
+```bash
+docker run -p 6333:6333 -p 6334:6334 \
+  -e QDRANT__CLUSTER__ENABLED=true \
+  -e QDRANT__CLUSTER__P2P__PORT=6335 \
+  -v $(pwd)/storage1:/qdrant/storage \
+  qdrant/qdrant \
+  ./qdrant --uri 'http://node1.example.com:6335'
+```
+
+**Parameters:**
+- `--uri`: The address where THIS node can be reached by other nodes
+
+### Additional Nodes
+
+Subsequent nodes join by bootstrapping from the first node:
+
+```bash
+./qdrant \
+  --bootstrap 'http://node1.example.com:6335' \
+  --uri 'http://node2.example.com:6335'
+```
+
+With Docker:
+
+```bash
+docker run -p 6333:6333 -p 6334:6334 \
+  -e QDRANT__CLUSTER__ENABLED=true \
+  -e QDRANT__CLUSTER__P2P__PORT=6335 \
+  -v $(pwd)/storage2:/qdrant/storage \
+  qdrant/qdrant \
+  ./qdrant \
+    --bootstrap 'http://node1.example.com:6335' \
+    --uri 'http://node2.example.com:6335'
+```
+
+**Parameters:**
+- `--bootstrap`: Address of an existing cluster node to bootstrap from
+- `--uri`: The address where THIS node can be reached
+
+## Docker Compose Cluster Example
+
+Complete 3-node cluster setup:
+
+```yaml
+version: "3.7"
+
+services:
+  qdrant_node_1:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_node_1
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__CLUSTER__ENABLED=true
+      - QDRANT__CLUSTER__P2P__PORT=6335
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./storage_node_1:/qdrant/storage:z
+    command: ./qdrant --uri 'http://qdrant_node_1:6335'
+    healthcheck:
+      test: bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 3
+
+  qdrant_node_2:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_node_2
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__CLUSTER__ENABLED=true
+      - QDRANT__CLUSTER__P2P__PORT=6335
+    depends_on:
+      - qdrant_node_1
+    ports:
+      - "6433:6333"
+      - "6434:6334"
+    volumes:
+      - ./storage_node_2:/qdrant/storage:z
+    command: ./qdrant --bootstrap 'http://qdrant_node_1:6335' --uri 'http://qdrant_node_2:6335'
+
+  qdrant_node_3:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_node_3
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__CLUSTER__ENABLED=true
+      - QDRANT__CLUSTER__P2P__PORT=6335
+    depends_on:
+      - qdrant_node_1
+    ports:
+      - "6533:6333"
+      - "6534:6334"
+    volumes:
+      - ./storage_node_3:/qdrant/storage:z
+    command: ./qdrant --bootstrap 'http://qdrant_node_1:6335' --uri 'http://qdrant_node_3:6335'
+```
+
+Start the cluster:
+
+```bash
+docker-compose up -d
+```
+
+Access nodes:
+- Node 1: `http://localhost:6333`
+- Node 2: `http://localhost:6433`
+- Node 3: `http://localhost:6533`
+
+## Cluster Management
+
+### Check Cluster Status
+
+```bash
+curl http://localhost:6333/cluster
+```
+
+Response:
+
+```json
+{
+  "result": {
+    "status": "enabled",
+    "peer_id": 1234567890,
+    "peers": {
+      "1234567890": {
+        "uri": "http://node1:6335"
+      },
+      "9876543210": {
+        "uri": "http://node2:6335"
+      }
+    },
+    "raft_info": {
+      "term": 1,
+      "commit": 123,
+      "pending_operations": 0,
+      "leader": 1234567890,
+      "role": "Leader"
+    }
+  },
+  "status": "ok"
+}
+```
+
+### Remove a Peer
+
+```bash
+curl -X DELETE 'http://localhost:6333/cluster/peer/{peer_id}'
+```
+
+## Collection Configuration
+
+### Replication Factor
+
+Set how many copies of each shard to maintain:
+
+```bash
+curl -X PUT 'http://localhost:6333/collections/my_collection' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "vectors": {
+      "size": 384,
+      "distance": "Cosine"
+    },
+    "replication_factor": 3,
+    "write_consistency_factor": 2
+  }'
+```
+
+**Parameters:**
+- `replication_factor`: Number of replicas for each shard (default: 1)
+- `write_consistency_factor`: How many replicas must acknowledge a write (default: 1)
+
+### Shard Distribution
+
+Control how shards are distributed:
+
+```json
+{
+  "vectors": {"size": 384, "distance": "Cosine"},
+  "shard_number": 6,
+  "replication_factor": 2
+}
+```
+
+With 3 nodes and 6 shards:
+- Each node gets 2 shards
+- Each shard has 2 replicas (on different nodes)
+
+## Shard Transfer Methods
+
+Qdrant supports three methods for shard transfer:
+
+1. **stream_records**: Stream records one by one
+2. **snapshot**: Transfer entire snapshot
+3. **wal_delta**: Transfer only WAL delta
+
+Configure default method:
+
+```yaml
+storage:
+  shard_transfer_method: stream_records
+```
+
+Or via environment:
+
+```bash
+QDRANT__STORAGE__SHARD_TRANSFER_METHOD=snapshot
+```
+
+## Consensus Configuration
+
+### Tick Period
+
+Controls how frequently peers ping each other:
+
+```yaml
+cluster:
+  consensus:
+    tick_period_ms: 100  # Default: 100ms
+```
+
+<Warning>
+Lower values detect failures faster but increase network/CPU overhead.
+</Warning>
+
+### Bootstrap Timeout
+
+Time to wait for bootstrap to complete:
+
+```yaml
+cluster:
+  consensus:
+    bootstrap_timeout_sec: 15  # Default: 15s
+```
+
+### WAL Compaction
+
+Compress consensus WAL after this many operations:
+
+```yaml
+cluster:
+  consensus:
+    compact_wal_entries: 128  # Default: 128
+```
+
+## TLS for Cluster Communication
+
+Enable mTLS for P2P communication:
+
+```yaml
+cluster:
+  p2p:
+    enable_tls: true
+
+tls:
+  cert: ./tls/cert.pem
+  key: ./tls/key.pem
+  ca_cert: ./tls/cacert.pem
+```
+
+Environment variables:
+
+```bash
+QDRANT__CLUSTER__P2P__ENABLE_TLS=true
+QDRANT__TLS__CERT=/qdrant/tls/cert.pem
+QDRANT__TLS__KEY=/qdrant/tls/key.pem
+QDRANT__TLS__CA_CERT=/qdrant/tls/cacert.pem
+```
+
+## Scaling the Cluster
+
+### Adding Nodes
+
+1. Start new node with `--bootstrap` pointing to any existing node:
+
+```bash
+./qdrant \
+  --bootstrap 'http://existing-node:6335' \
+  --uri 'http://new-node:6335'
+```
+
+2. The cluster will automatically distribute shards to the new node
+
+### Removing Nodes
+
+1. Remove peer from cluster:
+
+```bash
+curl -X DELETE 'http://localhost:6333/cluster/peer/{peer_id}'
+```
+
+2. Shards will be automatically redistributed to remaining nodes
+
+## Resharding
+
+Qdrant supports dynamic resharding (experimental):
+
+```yaml
+cluster:
+  resharding_enabled: true
+```
+
+This allows changing the number of shards for a collection without downtime.
+
+## Disaster Recovery
+
+### Reinitialize Consensus
+
+If the cluster is in a bad state, reinitialize consensus:
+
+**With bootstrap URI** (node will rejoin cluster):
+
+```bash
+./qdrant --reinit --bootstrap 'http://node1:6335' --uri 'http://this-node:6335'
+```
+
+**Without bootstrap URI** (becomes single-node cluster):
+
+```bash
+./qdrant --reinit --uri 'http://this-node:6335'
+```
+
+<Warning>
+This removes current consensus state. Use only when cluster is unrecoverable.
+</Warning>
+
+## Load Balancing
+
+### Round-Robin DNS
+
+Use DNS to distribute requests across nodes:
+
+```
+qdrant.example.com.  IN  A  192.168.1.10
+qdrant.example.com.  IN  A  192.168.1.11
+qdrant.example.com.  IN  A  192.168.1.12
+```
+
+### NGINX Load Balancer
+
+```nginx
+upstream qdrant_cluster {
+    least_conn;
+    server node1.example.com:6333;
+    server node2.example.com:6333;
+    server node3.example.com:6333;
+}
+
+server {
+    listen 80;
+    server_name qdrant.example.com;
+    
+    location / {
+        proxy_pass http://qdrant_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+### Kubernetes Service
+
+Kubernetes automatically load balances across pods:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+spec:
+  type: LoadBalancer
+  selector:
+    app: qdrant
+  ports:
+  - port: 6333
+    targetPort: 6333
+```
+
+## Performance Tuning
+
+### Connection Pool Size
+
+```yaml
+cluster:
+  p2p:
+    connection_pool_size: 4  # Default: 4
+```
+
+### Message Queue Size
+
+```yaml
+cluster:
+  consensus:
+    max_message_queue_size: 100  # Default: 100
+```
+
+### Timeouts
+
+```yaml
+cluster:
+  grpc_timeout_ms: 5000  # Default: 5000ms
+  connection_timeout_ms: 5000  # Default: 5000ms
+```
+
+## Monitoring
+
+### Cluster Metrics
+
+Available at `/metrics` endpoint:
+
+- `qdrant_cluster_peers_total`
+- `qdrant_cluster_term`
+- `qdrant_cluster_commit_index`
+- `qdrant_cluster_pending_operations`
+- `qdrant_cluster_is_leader`
+
+### Health Checks
+
+Check if node is part of healthy cluster:
+
+```bash
+curl http://localhost:6333/cluster
+```
+
+Check specific collection's cluster status:
+
+```bash
+curl http://localhost:6333/collections/{collection_name}/cluster
+```
+
+## Best Practices
+
+1. **Use odd number of nodes** (3, 5, 7) for Raft consensus
+2. **Set replication_factor ≥ 2** for high availability
+3. **Enable cluster TLS** in production
+4. **Monitor consensus metrics** (term, commit, pending ops)
+5. **Use consistent `--uri` values** that nodes can actually reach
+6. **Keep tick_period_ms default** unless you know what you're doing
+7. **Test failover scenarios** before production
+8. **Use load balancer** for client connections
+9. **Plan for network partitions** (split-brain scenarios)
+10. **Backup regularly** using snapshots
+
+## Troubleshooting
+
+### Node won't join cluster
+
+- Verify `--bootstrap` URI is reachable
+- Check port 6335 is not blocked by firewall
+- Ensure `cluster.enabled: true` in config
+- Check logs for errors
+
+### Split-brain scenario
+
+- Check network connectivity between nodes
+- Verify no network partition exists
+- Review Raft leader election in logs
+
+### High latency
+
+- Increase `connection_pool_size`
+- Reduce `replication_factor` if acceptable
+- Check network latency between nodes
+- Review `grpc_timeout_ms` settings
+
+## Next Steps
+
+- [Configuration Reference](/deployment/configuration)
+- [Security Guide](/deployment/security)
+- [Kubernetes Deployment](/deployment/kubernetes)

@@ -1,0 +1,357 @@
+---
+title: Replication
+description: Configure replication for high availability and fault tolerance
+---
+
+Replication ensures your data remains available even when nodes fail. Qdrant creates multiple copies of each shard across cluster nodes.
+
+## Replication Parameters
+
+<ParamField path="replication_factor" type="integer" default="1">
+  Number of replicas for each shard. Each replica is a complete copy of the shard data.
+  - Minimum: 1 (no replication)
+  - Recommended for production: 3 or more
+</ParamField>
+
+<ParamField path="write_consistency_factor" type="integer" default="1">
+  Number of replicas that must acknowledge a write for it to be considered successful.
+  - Must be ≤ `replication_factor`
+  - Higher values increase consistency but may reduce availability
+  - Does not impact performance
+</ParamField>
+
+<ParamField path="read_fan_out_factor" type="integer" optional>
+  Number of additional replicas to query in parallel for read operations.
+  - `null` (default): Auto-determined based on local replica load
+  - `0`: Query only the local replica
+  - `> 0`: Query N additional replicas to reduce latency spikes
+</ParamField>
+
+<ParamField path="read_fan_out_delay_ms" type="integer" optional>
+  Milliseconds to wait before fanning out to additional replicas.
+  - Default: 0 (disabled)
+  - Useful for reducing latency tail when some replicas are slow
+</ParamField>
+
+## Configuring Replication
+
+### At Collection Creation
+
+Specify replication parameters when creating a collection:
+
+```json
+{
+  "vectors": {
+    "size": 768,
+    "distance": "Cosine"
+  },
+  "shard_number": 2,
+  "replication_factor": 3,
+  "write_consistency_factor": 2
+}
+```
+
+This creates:
+- 2 shards
+- 3 replicas per shard (6 total replicas)
+- Writes succeed when 2 replicas acknowledge
+
+### Updating Replication
+
+You can modify replication settings after collection creation:
+
+```http
+PATCH /collections/{collection_name}
+```
+
+```json
+{
+  "replication_factor": 5,
+  "write_consistency_factor": 3
+}
+```
+
+<Note>
+Increasing `replication_factor` triggers replica creation. New replicas are populated asynchronously.
+</Note>
+
+## Replica States
+
+Each replica can be in one of several states:
+
+| State | Description |
+|-------|-------------|
+| `Active` | Replica is fully synchronized and serving requests |
+| `Dead` | Replica is unavailable or failed |
+| `Partial` | Replica is being created or synchronized |
+| `Initializing` | Replica is being prepared |
+| `Listener` | Replica is receiving updates but not serving reads |
+| `PartialSnapshot` | Replica is being restored from a snapshot |
+| `Recovery` | Replica is recovering from a failure |
+| `Resharding` | Replica is involved in a resharding operation |
+
+### Checking Replica States
+
+```http
+GET /collections/{collection_name}/cluster
+```
+
+Response:
+
+```json
+{
+  "result": {
+    "peer_id": 1,
+    "shard_count": 2,
+    "local_shards": [
+      {
+        "shard_id": 0,
+        "state": "Active"
+      },
+      {
+        "shard_id": 1,
+        "state": "Partial"
+      }
+    ],
+    "remote_shards": [
+      {
+        "shard_id": 0,
+        "peer_id": 2,
+        "state": "Active"
+      },
+      {
+        "shard_id": 0,
+        "peer_id": 3,
+        "state": "Active"
+      }
+    ]
+  }
+}
+```
+
+## Write Consistency
+
+The `write_consistency_factor` determines how many replicas must acknowledge a write:
+
+### Strict Consistency
+
+```json
+{
+  "replication_factor": 3,
+  "write_consistency_factor": 3
+}
+```
+
+✅ **Pros:**
+- All replicas always in sync
+- No risk of data loss
+
+❌ **Cons:**
+- Write fails if any replica is unavailable
+- Lower write availability
+
+### Eventual Consistency
+
+```json
+{
+  "replication_factor": 3,
+  "write_consistency_factor": 1
+}
+```
+
+✅ **Pros:**
+- High write availability
+- Tolerates replica failures
+
+❌ **Cons:**
+- Temporary inconsistencies possible
+- Replicas may diverge briefly
+
+### Quorum Consistency (Recommended)
+
+```json
+{
+  "replication_factor": 3,
+  "write_consistency_factor": 2
+}
+```
+
+✅ **Balanced approach:**
+- Good availability (tolerates 1 replica failure)
+- Strong consistency (majority agrees)
+- Industry standard for distributed systems
+
+## Read Fan-Out
+
+Read fan-out queries multiple replicas to reduce latency variability.
+
+### Automatic Fan-Out
+
+```json
+{
+  "read_fan_out_factor": null  // Auto mode (default)
+}
+```
+
+Qdrant automatically fans out when:
+- Local replica is under heavy load
+- Query latency exceeds threshold
+
+### Manual Fan-Out
+
+```json
+{
+  "read_fan_out_factor": 1,
+  "read_fan_out_delay_ms": 50
+}
+```
+
+Behavior:
+1. Query local replica
+2. Wait 50ms
+3. If no response, query 1 additional replica
+4. Return fastest response
+
+<Note>
+Fan-out increases cluster load but can significantly reduce p99 latency.
+</Note>
+
+## Replica Management
+
+### Creating Replicas
+
+Add a replica for a specific shard:
+
+```http
+POST /collections/{collection_name}/shards/{shard_id}/replicas
+```
+
+```json
+{
+  "peer_id": 4
+}
+```
+
+### Deleting Replicas
+
+Remove a replica from a specific peer:
+
+```http
+DELETE /collections/{collection_name}/shards/{shard_id}/replicas
+```
+
+```json
+{
+  "peer_id": 4
+}
+```
+
+<Warning>
+Do not reduce replicas below `write_consistency_factor` or writes will fail.
+</Warning>
+
+## Replica Synchronization
+
+Replicas stay synchronized through:
+
+### WAL Replication
+
+Write-Ahead Log entries are replicated to ensure durability:
+
+```json
+{
+  "wal_config": {
+    "wal_capacity_mb": 32,
+    "wal_segments_ahead": 0,
+    "wal_retain_closed": 1
+  }
+}
+```
+
+### Replica Recovery
+
+When a replica falls behind:
+
+1. **WAL catch-up**: Replay recent operations from WAL
+2. **Partial sync**: Transfer missing segments
+3. **Full sync**: Complete data transfer if too far behind
+
+## Performance Considerations
+
+### Replication Factor
+
+| Replicas | Storage Cost | Write Cost | Availability |
+|----------|--------------|------------|-------------|
+| 1 | 1x | Low | None |
+| 2 | 2x | Medium | Survives 1 failure |
+| 3 | 3x | High | Survives 2 failures |
+| 5 | 5x | Very High | Survives 4 failures |
+
+**Recommendation:**
+- Development: `replication_factor: 1`
+- Production: `replication_factor: 3`
+- Critical systems: `replication_factor: 5`
+
+### Network Overhead
+
+Replication increases network traffic:
+
+- **Writes**: Multiplied by `replication_factor`
+- **Reads**: Multiplied by `1 + read_fan_out_factor`
+
+Optimize by:
+- Using fast network connections (10GbE+)
+- Co-locating replicas in same datacenter
+- Enabling compression for replication
+
+## High Availability Patterns
+
+### Multi-AZ Deployment
+
+Distribute replicas across availability zones:
+
+```json
+{
+  "replication_factor": 3,
+  "placement": [
+    [1],  // AZ-A
+    [2],  // AZ-B
+    [3]   // AZ-C
+  ]
+}
+```
+
+### Active-Active Reads
+
+Serve reads from all replicas:
+
+```json
+{
+  "replication_factor": 3,
+  "write_consistency_factor": 2,
+  "read_fan_out_factor": 2
+}
+```
+
+Benefits:
+- Load balanced reads
+- Lower read latency
+- Better resource utilization
+
+## Monitoring Replication
+
+Key metrics to monitor:
+
+- **Replica lag**: Time behind leader replica
+- **Sync state**: Percentage of replicas in `Active` state
+- **Failed writes**: Writes rejected due to insufficient replicas
+- **Recovery time**: Time to restore a failed replica
+
+## Source Code References
+
+Key implementation files:
+
+- `lib/collection/src/collection/sharding_keys.rs:17` - Replica set creation
+- `lib/collection/src/config.rs:104` - Replication factor configuration
+- `lib/collection/src/config.rs:111` - Write consistency factor
+- `lib/collection/src/config.rs:118` - Read fan-out configuration

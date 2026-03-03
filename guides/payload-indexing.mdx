@@ -1,0 +1,415 @@
+---
+title: Payload Indexing
+description: Create indexes on payload fields for faster filtering
+---
+
+Payload indexes dramatically improve the performance of filtered searches. Without indexes, Qdrant must scan all points to evaluate filter conditions. With indexes, Qdrant can quickly identify matching points.
+
+## When to Create Indexes
+
+Create indexes for payload fields that:
+- Are used frequently in filters
+- Have high cardinality (many unique values)
+- Are used in range queries
+- Need to support full-text search
+
+<Note>
+**Index vs No Index:**
+- Without index: O(N) - scans all points
+- With index: O(log N) or O(1) - uses index structure
+
+For a 1M point collection, this can mean the difference between 1000ms and 1ms query time.
+</Note>
+
+## Creating Indexes
+
+### Keyword Index
+
+For exact matching on string values (categories, IDs, status):
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "city",
+    "field_schema": "keyword"
+  }'
+```
+
+**Response:**
+```json
+{
+  "result": {
+    "operation_id": 0,
+    "status": "completed"
+  },
+  "status": "ok",
+  "time": 0.156
+}
+```
+
+### Integer Index
+
+For numeric values like IDs, counts, timestamps:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "user_id",
+    "field_schema": "integer"
+  }'
+```
+
+With custom parameters:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "count",
+    "field_schema": {
+      "type": "integer",
+      "lookup": true,
+      "range": true
+    }
+  }'
+```
+
+**Parameters:**
+- `lookup` - Enable exact match queries (default: true)
+- `range` - Enable range queries (default: true)
+
+<Note>
+Disabling unused features reduces memory usage. If you only need exact matches, set `range: false`.
+</Note>
+
+### Float Index
+
+For decimal numbers like prices, ratings, scores:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "price",
+    "field_schema": "float"
+  }'
+```
+
+### Bool Index
+
+For boolean flags:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "in_stock",
+    "field_schema": "bool"
+  }'
+```
+
+### Geo Index
+
+For geographic coordinates (enables geo filters):
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "location",
+    "field_schema": "geo"
+  }'
+```
+
+**Payload format:**
+```json
+{
+  "location": {
+    "lon": 13.404954,
+    "lat": 52.520008
+  }
+}
+```
+
+### Text Index
+
+For full-text search on text fields:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "description",
+    "field_schema": "text"
+  }'
+```
+
+With tokenization options:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "description",
+    "field_schema": {
+      "type": "text",
+      "tokenizer": "word",
+      "min_token_len": 2,
+      "max_token_len": 20,
+      "lowercase": true
+    }
+  }'
+```
+
+**Tokenizers:**
+- `word` - Split on whitespace and punctuation
+- `whitespace` - Split only on whitespace
+- `prefix` - Create prefix tokens for autocomplete
+- `multilingual` - Language-aware tokenization
+
+### DateTime Index
+
+For date and time values:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "created_at",
+    "field_schema": "datetime"
+  }'
+```
+
+**Payload format (RFC 3339):**
+```json
+{
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### UUID Index
+
+For UUID fields:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "product_id",
+    "field_schema": "uuid"
+  }'
+```
+
+## Nested Field Indexes
+
+Create indexes on nested JSON fields:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "user.profile.age",
+    "field_schema": "integer"
+  }'
+```
+
+## Deleting Indexes
+
+Remove an index when it's no longer needed:
+
+```bash
+curl -X DELETE http://localhost:6333/collections/my_collection/index/city
+```
+
+**Response:**
+```json
+{
+  "result": {
+    "operation_id": 1,
+    "status": "completed"
+  },
+  "status": "ok",
+  "time": 0.089
+}
+```
+
+## Viewing Index Information
+
+Check existing indexes for a collection:
+
+```bash
+curl http://localhost:6333/collections/my_collection
+```
+
+The response includes payload schema with index information:
+
+```json
+{
+  "result": {
+    "status": "green",
+    "config": {...},
+    "payload_schema": {
+      "city": {
+        "data_type": "keyword",
+        "points": 15000
+      },
+      "price": {
+        "data_type": "float",
+        "points": 15000
+      },
+      "user_id": {
+        "data_type": "integer",
+        "points": 15000,
+        "params": {
+          "lookup": true,
+          "range": true
+        }
+      }
+    }
+  }
+}
+```
+
+## On-Disk Indexes
+
+For very large collections, store indexes on disk to reduce RAM usage:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "description",
+    "field_schema": {
+      "type": "text",
+      "on_disk": true
+    }
+  }'
+```
+
+<Note>
+On-disk indexes trade memory for slightly slower query performance. Use for:
+- Large text indexes
+- Infrequently queried fields
+- When RAM is limited
+</Note>
+
+## Index Building Process
+
+Index creation happens asynchronously:
+
+<Steps>
+  <Step title="Request submitted">
+    The API returns immediately with operation_id
+  </Step>
+
+  <Step title="Index builds in background">
+    Qdrant builds the index segment by segment
+  </Step>
+
+  <Step title="Index becomes active">
+    Once complete, the index is used for all subsequent queries
+  </Step>
+</Steps>
+
+Use `wait=true` to wait for completion:
+
+```bash
+curl -X PUT "http://localhost:6333/collections/my_collection/index?wait=true" \
+  -H 'Content-Type: application/json' \
+  -d '{...}'
+```
+
+## Performance Characteristics
+
+### Index Type Performance
+
+| Index Type | Lookup Speed | Range Query | Memory Usage | Build Time |
+|------------|--------------|-------------|--------------|------------|
+| Keyword    | O(1)         | N/A         | Medium       | Fast       |
+| Integer    | O(1)         | O(log N)    | Low          | Fast       |
+| Float      | N/A          | O(log N)    | Low          | Fast       |
+| Geo        | O(log N)     | O(log N)    | Medium       | Medium     |
+| Text       | O(log N)     | N/A         | High         | Slow       |
+| Bool       | O(1)         | N/A         | Very Low     | Very Fast  |
+
+### Memory Usage
+
+Approximate memory per 1M points:
+
+- **Keyword**: 50-200 MB (depends on string length)
+- **Integer**: 8-16 MB
+- **Float**: 8-16 MB
+- **Bool**: 1-2 MB
+- **Geo**: 32-64 MB
+- **Text**: 100-500 MB (depends on text length and tokenization)
+
+## Best Practices
+
+<Steps>
+  <Step title="Index only what you filter on">
+    Every index consumes memory. Only create indexes for fields actively used in filters.
+  </Step>
+
+  <Step title="Create indexes before bulk upload">
+    If uploading millions of points, create indexes first. Qdrant will index points as they're inserted.
+  </Step>
+
+  <Step title="Use specific types">
+    Don't use `keyword` for numbers. Use `integer` or `float` for better performance.
+  </Step>
+
+  <Step title="Consider cardinality">
+    - High cardinality (user_id, product_id): Index is very beneficial
+    - Low cardinality (status with 3 values): Index may not help much
+    - Boolean fields: Index is very cheap, always create
+  </Step>
+
+  <Step title="Monitor index usage">
+    Check collection stats to see if indexes are being used effectively.
+  </Step>
+</Steps>
+
+## Multi-Tenant Optimization
+
+For multi-tenant applications, enable special optimization:
+
+```bash
+curl -X PUT http://localhost:6333/collections/my_collection/index \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_name": "tenant_id",
+    "field_schema": {
+      "type": "keyword",
+      "is_tenant": true
+    }
+  }'
+```
+
+This optimizes the index structure for filtering by tenant, improving performance when you have many tenants.
+
+## Troubleshooting
+
+<Warning>
+**Index Build Failed:**
+If index creation fails:
+1. Check field data types match the index type
+2. Verify field exists in at least some points
+3. Check available system memory
+4. Review logs for specific errors
+</Warning>
+
+<Warning>
+**Filters Still Slow:**
+If filters are slow even with indexes:
+1. Verify index was created successfully
+2. Check if field path is correct (especially for nested fields)
+3. Consider using simpler filter conditions
+4. Monitor if index is being used (check query plan in logs)
+</Warning>
+
+## Next Steps
+
+- Learn about [quantization](/guides/quantization) to reduce vector memory usage
+- Explore [hybrid search](/guides/hybrid-search) combining dense and sparse vectors

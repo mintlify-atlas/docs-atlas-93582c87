@@ -1,0 +1,230 @@
+---
+title: List Collection Snapshots
+openapi: GET /collections/{collection_name}/snapshots
+---
+
+Get a list of all available snapshots for a collection. This endpoint returns metadata about each snapshot including name, size, creation time, and checksum.
+
+## Use Cases
+
+- View available backup snapshots
+- Find snapshots for recovery operations
+- Monitor snapshot sizes and ages
+- Audit snapshot inventory
+- Select specific snapshots for restoration
+
+## Path Parameters
+
+<ParamField path="collection_name" type="string" required>
+  Name of the collection for which to list snapshots.
+</ParamField>
+
+## Response
+
+<ResponseField name="result" type="array">
+  Array of snapshot descriptions
+  
+  <ResponseField name="name" type="string">
+    Snapshot file name
+    
+    ```
+    my-collection-3766212330831337-2024-07-22-08-31-55.snapshot
+    ```
+  </ResponseField>
+  
+  <ResponseField name="creation_time" type="string">
+    ISO 8601 timestamp when the snapshot was created
+    
+    ```
+    2024-07-22T08:31:55Z
+    ```
+  </ResponseField>
+  
+  <ResponseField name="size" type="integer">
+    Snapshot file size in bytes
+    
+    ```
+    1048576
+    ```
+  </ResponseField>
+  
+  <ResponseField name="checksum" type="string">
+    SHA-256 checksum of the snapshot file
+    
+    ```
+    a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+    ```
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status: `ok`
+</ResponseField>
+
+<ResponseField name="time" type="number">
+  Execution time in seconds
+</ResponseField>
+
+## Examples
+
+### List All Snapshots
+
+```bash
+GET /collections/my_collection/snapshots
+```
+
+Response:
+```json
+{
+  "result": [
+    {
+      "name": "my_collection-3766212330831337-2024-07-22-08-31-55.snapshot",
+      "creation_time": "2024-07-22T08:31:55Z",
+      "size": 1048576,
+      "checksum": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+    },
+    {
+      "name": "my_collection-3766212330831338-2024-07-21-10-15-30.snapshot",
+      "creation_time": "2024-07-21T10:15:30Z",
+      "size": 987654,
+      "checksum": "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3"
+    }
+  ],
+  "status": "ok",
+  "time": 0.002
+}
+```
+
+### Using cURL
+
+```bash
+curl -X GET 'http://localhost:6333/collections/my_collection/snapshots'
+```
+
+### Using Python Client
+
+```python
+from qdrant_client import QdrantClient
+
+client = QdrantClient("http://localhost:6333")
+
+snapshots = client.list_snapshots(collection_name="my_collection")
+
+for snapshot in snapshots:
+    print(f"Name: {snapshot.name}")
+    print(f"Created: {snapshot.creation_time}")
+    print(f"Size: {snapshot.size / 1024 / 1024:.2f} MB")
+    print(f"Checksum: {snapshot.checksum}")
+    print("---")
+```
+
+### Using TypeScript Client
+
+```typescript
+import { QdrantClient } from "@qdrant/js-client-rest";
+
+const client = new QdrantClient({ url: "http://localhost:6333" });
+
+const snapshots = await client.listSnapshots("my_collection");
+
+snapshots.forEach((snapshot) => {
+  console.log(`Name: ${snapshot.name}`);
+  console.log(`Created: ${snapshot.creation_time}`);
+  console.log(`Size: ${(snapshot.size / 1024 / 1024).toFixed(2)} MB`);
+  console.log(`Checksum: ${snapshot.checksum}`);
+  console.log("---");
+});
+```
+
+## Empty Collection (No Snapshots)
+
+If no snapshots exist:
+
+```json
+{
+  "result": [],
+  "status": "ok",
+  "time": 0.001
+}
+```
+
+## Snapshot Information
+
+### Snapshot Name Format
+
+```
+{collection_name}-{unique_id}-{timestamp}.snapshot
+```
+
+Example:
+```
+my_collection-3766212330831337-2024-07-22-08-31-55.snapshot
+```
+
+Components:
+- `my_collection`: Collection name
+- `3766212330831337`: Unique identifier
+- `2024-07-22-08-31-55`: Creation timestamp (YYYY-MM-DD-HH-MM-SS)
+
+### Size Information
+
+Snapshot sizes vary based on:
+- Number of points in collection
+- Vector dimensions
+- Payload complexity
+- Compression efficiency
+- Number of indexed fields
+
+### Checksum
+
+The SHA-256 checksum can be used to:
+- Verify snapshot integrity before recovery
+- Detect corruption during transfer
+- Ensure snapshot hasn't been modified
+- Validate downloads
+
+## Sorting and Filtering
+
+Snapshots are returned in no guaranteed order. To sort by creation time:
+
+```python
+snapshots = client.list_snapshots("my_collection")
+sorted_snapshots = sorted(snapshots, key=lambda s: s.creation_time, reverse=True)
+
+latest = sorted_snapshots[0]
+print(f"Latest snapshot: {latest.name}")
+```
+
+## Use Cases by Scenario
+
+### Find Latest Snapshot
+
+```python
+snapshots = client.list_snapshots("my_collection")
+latest = max(snapshots, key=lambda s: s.creation_time)
+print(f"Latest: {latest.name}")
+```
+
+### Check Snapshot Availability
+
+```python
+snapshots = client.list_snapshots("my_collection")
+if not snapshots:
+    print("No snapshots available - creating first backup...")
+    client.create_snapshot("my_collection")
+```
+
+### Monitor Storage Usage
+
+```python
+snapshots = client.list_snapshots("my_collection")
+total_size = sum(s.size for s in snapshots)
+print(f"Total snapshot storage: {total_size / 1024 / 1024 / 1024:.2f} GB")
+```
+
+## Related Operations
+
+- [Create Snapshot](/api/snapshots/create) - Create a new snapshot
+- [Delete Snapshot](/api/snapshots/delete) - Remove a snapshot
+- [Recover from Snapshot](/api/snapshots/recover) - Restore collection from snapshot
+- [Download Snapshot](/api/snapshots/download) - Download snapshot file
